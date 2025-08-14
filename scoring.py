@@ -9,39 +9,59 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def cluster_graph_to_entity_graph(cluster_graph: ClusterGraph) -> EntityGraph:
-    n_entities = cluster_graph.n_entities
-    eg = EntityGraph(n_entities)
-    latent_ids = sorted(cluster_graph.latent_nodes)
+def node_sort_key(x):
+    """
+    Total order for different node id types:
+      - ints -> bucket 0, key (0, int(x))
+      - tuples (e.g., (rgid, cgid)) -> bucket 1, key (1, len, *tuple)
+    """
+    if isinstance(x, int):
+        return (0, int(x))
+    if isinstance(x, tuple):
+        return (1, len(x), *x)
     
-    # local (current) -> local-index (compact) for building matrices
-    cluster_to_local = {lid: n_entities + idx for idx, lid in enumerate(latent_ids)}
 
-    ent_glob = cluster_graph.latent_to_global_id["entities"]
-    clu_glob = cluster_graph.latent_to_global_id["clusters"]
+def edge_sort_key(e):
+    u, v = e
+    ku, kv = node_sort_key(u), node_sort_key(v)
+    return (ku, kv) if ku <= kv else (kv, ku)
 
-    gid_of_local = [ent_glob[i] for i in range(n_entities)]
-    for lid in latent_ids:
-        gid_of_local.append(clu_glob[lid])
 
-    # connect entities to their latent
-    for i in range(n_entities):
-        cid = cluster_graph.entity_assignments[i]
-        if cid != -1:
-            eg.add_edge(i, cluster_to_local[cid], type='external')
+def cluster_graph_to_entity_graph(cluster_graph: ClusterGraph) -> EntityGraph:
+    n_entities = cluster_graph.n_entities()
+    latent_lids = sorted(cluster_graph.latent_ids)
 
-    # latent-latent edges per topology (locals)
-    for a, neighbours in cluster_graph.latent_adjacency.items():
-        for b in neighbours:
-            if a < b:
-                eg.add_edge(cluster_to_local[a], cluster_to_local[b], type='internal')
+    idx_to_eid = cluster_graph.entity_idx_to_eid
+    lid_to_cid = cluster_graph.latent_lid_to_cid
 
-    eg.finalise(n_latent=len(latent_ids), gid_of_local=gid_of_local)
+    entity_gids = [int(idx_to_eid[i]) for i in range(n_entities)]
+    cluster_cids = [lid_to_cid[lid] for lid in latent_lids]
+
+    eg = EntityGraph(entity_gids=entity_gids, cluster_cids=cluster_cids)
+
+    # entity→cluster edges (external)
+    for idx in range(n_entities):
+        lid = int(cluster_graph.entity_assignments[idx])
+        if lid == -1:
+            continue  # orphaned
+        cid = lid_to_cid.get(lid)
+        if cid is None:
+            raise KeyError(f"ClusterGraph has assignment to latent lid {lid}, "
+                           f"but no global cid mapping was found.")
+        eg.add_external(eid=entity_gids[idx], cid=cid)
+
+    # cluster↔cluster edges (internal)
+    for a_lid, neighs in cluster_graph.latent_adjacency.items():
+        a_cid = lid_to_cid.get(a_lid)
+        for b_lid in neighs:
+            if a_lid < b_lid:  # emit each undirected edge once
+                b_cid = lid_to_cid.get(b_lid)
+                eg.add_internal(a_cid, b_cid)
+
     return eg
 
 
-def get_params(cluster_graph, entity_graph, form, data, is_similarity):
-    # grab tied init params from metadata if present, else compute
+def get_params(cluster_graph: ClusterGraph, entity_graph: EntityGraph, form: StructuralForm, data: np.ndarray, is_similarity: bool) -> Dict[str, Any]:
 
     # parent_meta = current.metadata
     # parent_tied = None
@@ -58,16 +78,15 @@ def get_params(cluster_graph, entity_graph, form, data, is_similarity):
         return cluster_graph.metadata["opt_params"]
     else:
         _, params = log_marginal_likelihood(data, entity_graph, form, tied_only=False, is_similarity=is_similarity)
-        cluster_graph.metadata.setdefault("opt_params", {}).update(params)
         return params
 
 
-def build_fast_params_vector(entity_graph, opt_params: Dict[str, Any]) -> np.ndarray:
+def build_fast_params_vector(entity_graph: EntityGraph, opt_params: Dict[str, Any]) -> np.ndarray:
     """
-    Returns a vector [log_l_1, ..., log_l_E, log_sigma] aligned with sorted(entity_graph.all_edges).
+    Returns a vector [log_l_1, ..., log_l_E, log_sigma] aligned with sorted(entity_graph.edges).
     For edges not present in the 'untied' map, uses the mean log-length of those that are.
     """
-    edges = sorted(list(entity_graph.all_edges_global))
+    edges = sorted(list(entity_graph.edges), key=edge_sort_key)
 
     if not opt_params or "untied" not in opt_params:
         log_sigma = opt_params["tied"].get("log_sigma")
@@ -86,7 +105,7 @@ def build_fast_params_vector(entity_graph, opt_params: Dict[str, Any]) -> np.nda
     return np.array(log_ls + [log_sigma], dtype=float)
 
 
-def find_score(cluster_graph, form: StructuralForm, data: np.ndarray, is_similarity: bool, speed: str) -> float:
+def find_score(cluster_graph: ClusterGraph, form: StructuralForm, data: np.ndarray, is_similarity: bool, speed: str) -> float:
     """
     Compute log posterior = log P(S,F|D) = log P(D|S) + log P(S|F).
     If speed = 'fast', just evaluate this with given params (weights + sigma).
@@ -147,14 +166,14 @@ def restrict_to_assigned(cluster_graph: ClusterGraph):
     if not np.any(mask):
         return None, mask  # nothing assigned
     new_assign = cluster_graph.entity_assignments[mask].copy()
-    # copy latent adjacency and metadata; leave latent IDs as-is
+
+    # build new idx->eid map (new local indices 0..k-1 -> original eids)
+    keep_idx = np.where(mask)[0]
+    old_idx_to_eid = cluster_graph.entity_idx_to_eid
+    new_idx_to_eid = {j: int(old_idx_to_eid[i]) for j, i in enumerate(keep_idx)}
+
     restricted = cluster_graph.copy()
     restricted.update_entity_assignments(new_assign)
-    # rebuild entity mapping: new local j -> old global id of original local i
-    keep_idx = np.where(mask)[0]
-    old_ent = cluster_graph.latent_to_global_id["entities"]
-    new_ent = {j: old_ent[i] for j, i in enumerate(keep_idx)}
-    restricted.latent_to_global_id["entities"] = new_ent
-    # ensure all present latents have cluster gids (allocator preserved by copy)
-    restricted.init_global_maps(entity_global_ids=new_ent)
+    restricted.entity_idx_to_eid = new_idx_to_eid
+    restricted.init_id_maps(entity_idx_to_eid=new_idx_to_eid)
     return restricted, mask

@@ -10,43 +10,55 @@ import matplotlib.patheffects as pe
 
 
 def build_graph(cg, len_scale: float = 1.0):
-    local2global_cluster = {int(k): int(v) for k, v in cg.latent_to_global_id["clusters"].items()}
-    local2global_entity  = {int(k): int(v) for k, v in cg.latent_to_global_id["entities"].items()}
-    gid2local_entity = {gid: loc for loc, gid in local2global_entity.items()}
-    gid2local_cluster = {gid: loc for loc, gid in local2global_cluster.items()}
+    """
+    Build a NetworkX graph whose node ids are the global ids:
+      - entity nodes use eid (from cg.entity_idx_to_eid)
+      - cluster nodes use cid (from cg.latent_lid_to_cid)
+        (in product graphs these are tuples (rgid, cgid))
 
-    log_map = (cg.metadata.get("opt_params", {}).get("untied", {}).get("log_ls", {}))
+    Edge lengths come from cg.metadata['opt_params']['untied']['log_ls'].
+    """
+    # local -> global maps
+    local_ent_to_eid: Dict[int, object] = dict(getattr(cg, "entity_idx_to_eid", {}))  # idx -> eid
+    local_lat_to_cid: Dict[int, object] = dict(getattr(cg, "latent_lid_to_cid", {}))  # lid -> cid
+
+    # global -> local inverses (for labeling)
+    gid2local_entity: Dict[object, int] = {eid: idx for idx, eid in local_ent_to_eid.items()}
+    gid2local_cluster: Dict[object, int] = {cid: lid for lid, cid in local_lat_to_cid.items()}
+
+    log_map: Dict[Tuple[object, object], float] = (
+        cg.metadata.get("opt_params", {}).get("untied", {}).get("log_ls", {})
+    )
 
     G = nx.Graph()
 
-    # iterate edges, exponentiate to get length, scale it
-    for key, logL in log_map.items():
-        u_gid, v_gid = (int(key[0]), int(key[1]))
-        length = float(np.exp(logL)) * float(len_scale)
+    for (u_gid, v_gid), logL in log_map.items():
+        length = np.exp(float(logL)) * float(len_scale)
 
-        u_is_cluster = u_gid in gid2local_cluster
-        v_is_cluster = v_gid in gid2local_cluster
-        u_is_entity  = u_gid in gid2local_entity
-        v_is_entity  = v_gid in gid2local_entity
-
-        if u_is_cluster:
+        if u_gid in gid2local_cluster:
             G.add_node(u_gid, kind="cluster")
-        elif u_is_entity:
+        elif u_gid in gid2local_entity:
             G.add_node(u_gid, kind="entity")
 
-        if v_is_cluster:
+        if v_gid in gid2local_cluster:
             G.add_node(v_gid, kind="cluster")
-        elif v_is_entity:
+        elif v_gid in gid2local_entity:
             G.add_node(v_gid, kind="entity")
 
-        G.add_edge(u_gid, v_gid, length=length, spring_weight=1.0 / max(length, 1e-8), kind="edge")
+        G.add_edge(
+            u_gid,
+            v_gid,
+            length=length,
+            spring_weight=1.0 / max(length, 1e-12),
+            kind="edge",
+        )
 
     return G, gid2local_entity, gid2local_cluster
 
 
-def compute_layout_fewer_crossings(G, scale, seed=7, engine="neato"):
+def compute_layout_fewer_crossings(G, scale, engine="neato"):
     """
-    prefer fewer crossings, while still using edge 'length' as ideal spring length.
+    Prefer fewer crossings, while still using edge 'length' as ideal spring length.
     """
     lens = [d.get("length") for _, _, d in G.edges(data=True)]
     med = float(np.median(lens))
@@ -72,7 +84,7 @@ def compute_fixed_entity_positions(cg_top,
                                    len_scale: float,
                                    scale: float):
     """
-    use the best scoring graph to place entities and clusters,
+    Use the best scoring graph to place entities and clusters,
     then freeze entity positions for the other graphs.
     """
     G_top, _, _ = build_graph(cg_top, len_scale=len_scale)
@@ -92,16 +104,14 @@ def plot_one_graph(cg,
                     title: Optional[str] = None,
                     ax: Optional[plt.Axes] = None):
     """
-    Build the graph from metadata, keep entity nodes fixed, and place clusters using a spring layout.
-    Entity↔cluster and cluster↔cluster edges are styled identically (black, same width/alpha).
     """
     G, e_gid2loc, _ = build_graph(cg, len_scale=len_scale)
+
     if ax is None:
         fig, ax = plt.subplots(figsize=(6, 5))
     ax.set_aspect("equal"); ax.axis("off")
 
     if plot_type == 'fixed':
-
         # initial positions: entities fixed, clusters start at their entities' centroid (if any) else origin
         pos_init = dict(entity_pos)
         for n, d in G.nodes(data=True):
@@ -112,23 +122,21 @@ def plot_one_graph(cg,
                     pos_init[n] = np.mean([entity_pos[m] for m in ent_neigh], axis=0)
                 else:
                     pos_init[n] = np.array([0.0, 0.0])
-
-        # spring layout with entities fixed (use inverse length as weight)
+        # spring layout with entities fixed
         pos = nx.spring_layout(
             G, pos=pos_init, fixed=list(entity_pos.keys()),
             weight="spring_weight", seed=seed, iterations=300
         )
-    
     elif plot_type == 'non_overlapping':
         pos = compute_layout_fewer_crossings(G, scale=scale)
     elif plot_type == "unfixed":
         pos = nx.kamada_kawai_layout(G, weight="length", scale=scale)
 
-    nx.draw_networkx_edges(G, pos, edgelist=list(G.edges()), width=0.2*cg.n_entities, edge_color="grey", ax=ax)
+    nx.draw_networkx_edges(G, pos, edgelist=list(G.edges()), width=0.2*cg.n_entities(), edge_color="grey", ax=ax)
 
     clusters = [n for n, d in G.nodes(data=True) if d.get("kind") == "cluster"]
     nx.draw_networkx_nodes(
-        G, pos, nodelist=clusters, node_size=int(7*cg.n_entities), node_shape="o",
+        G, pos, nodelist=clusters, node_size=int(7*cg.n_entities()), node_shape="o",
         edgecolors="black", node_color="none", linewidths=1.6, ax=ax
     )
 
@@ -138,12 +146,12 @@ def plot_one_graph(cg,
         for n in entities:
             loc = e_gid2loc.get(n, None)
             e_labels[n] = entity_names[loc] if (loc is not None and 0 <= loc < len(entity_names)) else f"e{loc}"
-        text_objs = nx.draw_networkx_labels(G, {k: pos[k] for k in entities}, labels=e_labels, font_size=cg.n_entities/2, font_weight="bold", font_color="black", ax=ax)
+        text_objs = nx.draw_networkx_labels(G, {k: pos[k] for k in entities}, labels=e_labels, font_size=cg.n_entities()/2, font_weight="bold", font_color="black", ax=ax)
         # add a clean white halo around each label for visibility
         # for t in text_objs.values():
         #     t.set_path_effects([pe.withStroke(linewidth=2.6, foreground="white")])
     else:
-        nx.draw_networkx_nodes(G, pos, nodelist=entities, node_size=50*cg.n_entities, node_shape="o", node_color="black", ax=ax)
+        nx.draw_networkx_nodes(G, pos, nodelist=entities, node_size=50*cg.n_entities(), node_shape="o", node_color="black", ax=ax)
 
     # if limits:
     #     ax.set_xlim(*limits["x"]); ax.set_ylim(*limits["y"])
@@ -279,7 +287,7 @@ def plot_all(graphs: List[Tuple[str, object]],
     rows = int(np.ceil(n_graphs / panels_per_row))+1
     cols = panels_per_row
 
-    per_panel_w, per_panel_h = int(0.5*top_cg.n_entities), int(0.4*top_cg.n_entities)
+    per_panel_w, per_panel_h = 0.5*top_cg.n_entities(), 0.4*top_cg.n_entities()
     bar_row_height = per_panel_h
     bar_graph_gap = per_panel_h*0.2
     fig_w = per_panel_w * panels_per_row
@@ -316,7 +324,7 @@ def plot_all(graphs: List[Tuple[str, object]],
                 if name == best_name:
                     rect = plt.Rectangle((-0.1, -0.1), 1.2, 1.3, transform=ax.transAxes,
                                          fill=False, clip_on=False,
-                                         edgecolor="red", linewidth=0.3*top_cg.n_entities)
+                                         edgecolor="red", linewidth=0.3*top_cg.n_entities())
                     ax.add_patch(rect)
                 idx += 1
             else:

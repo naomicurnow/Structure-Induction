@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.optimize import minimize, check_grad
 from graphs_and_forms import EntityGraph
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List
 from config import *
 import warnings
 import logging
@@ -10,25 +10,61 @@ import math
 
 logger = logging.getLogger(__name__)
 
+MIN_L = 1e-12      # min edge length (prevents 1/0 in weights)
+MIN_SIG = 1e-9     # min sigma (keeps prior finite/PD)
 
-def compute_weight_matrix(entity_graph: EntityGraph, edge_lengths: np.ndarray) -> np.ndarray:
-    """
-    Given an EntityGraph and a vector of edge lengths (same length as entity_graph.edges),
-    compute weight matrix W where for each edge (i,j):
-    w_ij = 1 / e_ij
-    Non-edges have zero weight.
-    """
-    n = entity_graph.n_nodes
-    W = np.zeros((n, n))
+LOG_L_MIN  = float(np.log(MIN_L))
+LOG_SIG_MIN = float(np.log(MIN_SIG))
 
-    for (idx, (i, j)) in enumerate(entity_graph.all_edges):
-        length = edge_lengths[idx]
-        if length <= 0:
-            logging.info("When calculating weight matrix, length was %d. Set to 1e-9", length)
-            length = 1e-9
+
+def node_sort_key(x):
+    """
+    Total order for different node id types:
+      - ints -> bucket 0, key (0, int(x))
+      - tuples (e.g., (rgid, cgid)) -> bucket 1, key (1, len, *tuple)
+    """
+    if isinstance(x, int):
+        return (0, int(x))
+    if isinstance(x, tuple):
+        return (1, len(x), *x)
+    
+
+def edge_sort_key(e):
+    u, v = e
+    ku, kv = node_sort_key(u), node_sort_key(v)
+    return (ku, kv) if ku <= kv else (kv, ku)
+
+
+def build_matrix_layout(entity_graph) -> Tuple[List[int], Dict[int,int]]:
+    """
+    Return (node_order_gids, gid_to_idx) where
+      node_order_gids = entity_gids + cluster_cids
+      gid_to_idx maps a global node id to its row/col index in matrices.
+    """
+    node_order_gids = list(entity_graph.entity_gids) + list(entity_graph.cluster_cids)
+    gid_to_idx = {gid: i for i, gid in enumerate(node_order_gids)}
+    return node_order_gids, gid_to_idx
+
+
+def compute_weight_matrix(edge_lengths: np.ndarray,
+                          ordered_edges: List[Tuple[int,int]],
+                          gid_to_idx: Dict[int,int],
+                          n_nodes: int) -> np.ndarray:
+    """
+    Compute weight matrix W where for each edge (i,j): w_ij = 1 / e_ij.
+    """
+    if len(edge_lengths) != len(ordered_edges):
+        raise ValueError(f"edge_lengths length {len(edge_lengths)} "
+                         f"does not match ordered_edges length {len(ordered_edges)}")
+    
+    W = np.zeros((n_nodes, n_nodes), dtype=float)
+    for k, (u_gid, v_gid) in enumerate(ordered_edges):
+        length = float(edge_lengths[k])
         w = 1.0 / length
-        W[i, j] = w
-        W[j, i] = w
+        u = gid_to_idx[u_gid]
+        v = gid_to_idx[v_gid]
+        W[u, v] = w
+        W[v, u] = w
 
     return W
 
@@ -57,12 +93,8 @@ def neg_log_posterior(params: np.ndarray,
                        is_similarity: bool,
                        return_grad: bool = False) -> float:
     """
-    working in log-parameter space.
-
-    neg_logpost : float
-      −[ log P(D|params) + log P(params) ]
-    grad : (m,) array
-      ∂/∂params (neg_logpost)
+    If return_grad == True, returns neg_logpost (−[ log P(D|params) + log P(params) ]), grad (∂/∂params (neg_logpost)). 
+    Else, just returns neg_logpost.
 
     params: if tied = 'both' -> single log_l
             if tied = 'int' -> single log_l for internal edges, untied external
@@ -94,8 +126,17 @@ def neg_log_posterior(params: np.ndarray,
         f_eff = float(f)
         S = (D @ D.T) / f_eff  # empirical scatter
 
+    # ensure consistent matrix layout and edge ordering
+    node_order_gids, gid_to_idx = build_matrix_layout(entity_graph)
+    n_nodes = len(node_order_gids)
+    idx_e = list(range(n_ent))
+    idx_c = list(range(n_ent, n_nodes))
+
+    ordered_edges = sorted(entity_graph.edges, key=edge_sort_key) # list of (gid,gid)
+    ordered_ext_edges = sorted(entity_graph.edges_external, key=edge_sort_key)
+    ordered_int_edges = sorted(entity_graph.edges_internal, key=edge_sort_key)
+
     # unpack parameters
-    ordered_edges = sorted(list(entity_graph.all_edges))
     if tied == 'both':
         log_l, log_sigma = params
         l = np.exp(log_l)
@@ -103,7 +144,6 @@ def neg_log_posterior(params: np.ndarray,
         log_l_dict = {edge: log_l for edge in ordered_edges}
     elif tied == 'int':
         *log_ls_ext, log_l_int, log_sigma = params.tolist()
-        ordered_ext_edges = sorted(list(entity_graph.ext_edges))
         if len(log_ls_ext) != len(ordered_ext_edges):
             raise ValueError("Expected %d external lengths, got %d" % (len(ordered_ext_edges), len(log_ls_ext)))
         log_l_dict = {}
@@ -114,7 +154,6 @@ def neg_log_posterior(params: np.ndarray,
         l_int = np.exp(log_l_int)
     elif tied == 'ext':
         *log_ls_int, log_l_ext, log_sigma = params.tolist()
-        ordered_int_edges = sorted(list(entity_graph.int_edges))
         if len(log_ls_int) != len(ordered_int_edges):
             raise ValueError("Expected %d internal lengths, got %d" % (len(ordered_int_edges), len(log_ls_int)))
         log_l_dict = {}
@@ -133,23 +172,19 @@ def neg_log_posterior(params: np.ndarray,
 
     sigma = max(np.exp(log_sigma), 1e-9)
 
-    # build the length-array in eactly entity_graph.edges order
-    edge_lengths = np.array([np.exp(log_l_dict[e]) for e in ordered_edges])
+    # edge lengths in the exact `ordered_edges` order
+    edge_lengths = np.array([np.exp(log_l_dict[e]) for e in ordered_edges], dtype=float)
 
     # precision matrix = Laplacian + prior
-    W = compute_weight_matrix(entity_graph, edge_lengths)
+    W = compute_weight_matrix(edge_lengths, ordered_edges, gid_to_idx, n_nodes)
     L = compute_graph_laplacian(W)
     P_full = add_feature_prior(L, sigma, n_ent)
-
-    idx_e = range(n_ent) # entity nodes: 0…n-1
-    idx_c = [i for i in range(P_full.shape[0]) if i not in idx_e]
 
     P_ee = P_full[np.ix_(idx_e, idx_e)]
     P_ec = P_full[np.ix_(idx_e, idx_c)]
     P_ce = P_full[np.ix_(idx_c, idx_e)]
     P_cc = P_full[np.ix_(idx_c, idx_c)]
     
-    # marginalised precision and objective
     try:
         P_cc_inv = np.linalg.inv(P_cc)
         prec_small = P_ee - P_ec @ P_cc_inv @ P_ce
@@ -168,10 +203,9 @@ def neg_log_posterior(params: np.ndarray,
         prior_l = 0.0
         for log_l in log_l_dict.values():
             l = np.exp(log_l)
-            # The negative log prior for a single edge length l
             prior_l += BETA * l - (ALPHA - 1) * log_l
     else:
-        raise 
+        raise ValueError(f"Unknown prior '{PRIOR}'")
 
     neg_logpost = neg_loglik + (prior_l + prior_sigma)
 
@@ -181,7 +215,6 @@ def neg_log_posterior(params: np.ndarray,
     # ***** gradient calculation *****
 
     grad = np.zeros_like(params)
-    n_nodes = W.shape[0]
 
     # common terms for trace gradient
     M = P_cc_inv @ P_ce
@@ -189,13 +222,18 @@ def neg_log_posterior(params: np.ndarray,
 
     try:
         if tied == 'both':
-            W0 = compute_weight_matrix(entity_graph, np.ones(len(entity_graph.all_edges)))
+            # dP/dlogl = (-1/l) * L0  where L0 is Laplacian with all weights = 1
+            W0 = compute_weight_matrix(np.ones(len(ordered_edges), dtype=float),
+                                       ordered_edges, gid_to_idx, n_nodes)
             L0_full = compute_graph_laplacian(W0)
             dP_full_dlogl = (-1.0 / l) * L0_full
             dP_cc_dlogl = dP_full_dlogl[np.ix_(idx_c, idx_c)]
 
             # log-det grad term
-            logdet_grad_l = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_dlogl)) - np.trace(np.linalg.solve(P_cc, dP_cc_dlogl)))
+            logdet_grad_l = -0.5 * f_eff * (
+                np.trace(np.linalg.solve(P_full, dP_full_dlogl)) - 
+                np.trace(np.linalg.solve(P_cc, dP_cc_dlogl))
+                )
 
             # trace grad term
             dP_ee_dl = dP_full_dlogl[np.ix_(idx_e, idx_e)]
@@ -217,139 +255,185 @@ def neg_log_posterior(params: np.ndarray,
                 grad[0] = logdet_grad_l + trace_grad_l + (BETA * l - (ALPHA-1)) * len(edge_lengths)
         
         elif tied == 'int':
+            # external edges (each has its own length)
             for j, e in enumerate(ordered_ext_edges):
-                u, v = e
+                u_gid, v_gid = e
+                u, v = gid_to_idx[u_gid], gid_to_idx[v_gid]
                 l_j = np.exp(log_ls_ext[j])
+
                 E_j = np.zeros((n_nodes, n_nodes))
                 E_j[u, u] = E_j[v, v] = 1
                 E_j[u, v] = E_j[v, u] = -1
+
                 dP_full_dj = (-1.0 / l_j) * E_j
                 dP_cc_dj = dP_full_dj[np.ix_(idx_c, idx_c)]
-                logdet_j = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_dj))
-                                      - np.trace(P_cc_inv @ dP_cc_dj))
-                # trace part
+
+                logdet_j = -0.5 * f_eff * (
+                    np.trace(np.linalg.solve(P_full, dP_full_dj)) -
+                    np.trace(P_cc_inv @ dP_cc_dj)
+                )
+
                 dP_ee = dP_full_dj[np.ix_(idx_e, idx_e)]
                 dP_ec = dP_full_dj[np.ix_(idx_e, idx_c)]
                 dP_ce = dP_full_dj[np.ix_(idx_c, idx_e)]
-                trace_j = 0.5 * f_eff * (np.trace(S @ dP_ee)
-                                     - np.trace(N @ dP_ce)
-                                     - np.trace(S @ dP_ec @ M)
-                                     + np.trace(N @ dP_cc_dj @ M))
+                
+                trace_j = 0.5 * f_eff * (
+                                    np.trace(S @ dP_ee)
+                                    - np.trace(N @ dP_ce)
+                                    - np.trace(S @ dP_ec @ M)
+                                    + np.trace(N @ dP_cc_dj @ M)
+                                )
                 
                 if PRIOR == 'exp':
                     grad[j] = logdet_j + trace_j + (BETA * l_j)
                 elif PRIOR == 'gamma':
                     grad[j] = logdet_j + trace_j + (BETA * l_j - (ALPHA - 1))
 
-            # single gradient for the shared internal log-length
+            # shared internal length
             E_int = np.zeros((n_nodes, n_nodes))
-            for e in entity_graph.int_edges:
-                u, v = e
-                E_int[u, u] += 1
-                E_int[v, v] += 1
-                E_int[u, v] -= 1
-                E_int[v, u] -= 1
+            for u_gid, v_gid in ordered_int_edges:
+                u, v = gid_to_idx[u_gid], gid_to_idx[v_gid]
+                E_int[u, u] += 1.0
+                E_int[v, v] += 1.0
+                E_int[u, v] -= 1.0
+                E_int[v, u] -= 1.0
+
             dP_full_int = (-1.0 / l_int) * E_int
             dP_cc_int = dP_full_int[np.ix_(idx_c, idx_c)]
-            logdet_int = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_int))
-                                     - np.trace(P_cc_inv @ dP_cc_int))
+
+            logdet_int = -0.5 * f_eff * (
+                np.trace(np.linalg.solve(P_full, dP_full_int)) -
+                np.trace(P_cc_inv @ dP_cc_int)
+            )
+            
             dP_ee_int = dP_full_int[np.ix_(idx_e, idx_e)]
             dP_ec_int = dP_full_int[np.ix_(idx_e, idx_c)]
             dP_ce_int = dP_full_int[np.ix_(idx_c, idx_e)]
-            trace_int = 0.5 * f_eff * (np.trace(S @ dP_ee_int)
-                                   - np.trace(N @ dP_ce_int)
-                                   - np.trace(S @ dP_ec_int @ M)
-                                   + np.trace(N @ dP_cc_int @ M))
+
+            trace_int = 0.5 * f_eff * (
+                np.trace(S @ dP_ee_int)
+                - np.trace(N @ dP_ce_int)
+                - np.trace(S @ dP_ec_int @ M)
+                + np.trace(N @ dP_cc_int @ M)
+            )
             
+            idx_shared = len(ordered_ext_edges)
             if PRIOR == 'exp':
-                grad[len(entity_graph.ext_edges)] = (logdet_int + trace_int + (BETA * l_int * len(entity_graph.int_edges)))
+                grad[idx_shared] = logdet_int + trace_int + (BETA * l_int * len(ordered_int_edges))
             elif PRIOR == 'gamma':
-                grad[len(entity_graph.ext_edges)] = (logdet_int + trace_int + (BETA * l_int - (ALPHA-1)) * len(entity_graph.int_edges))
+                grad[idx_shared] = logdet_int + trace_int + (BETA * l_int - (ALPHA - 1)) * len(ordered_int_edges)
         
         elif tied == 'ext':
+            # internal edges (each has its own length)
             for j, e in enumerate(ordered_int_edges):
+                u_gid, v_gid = e
                 u, v = e
                 l_j = np.exp(log_ls_int[j])
+
                 E_j = np.zeros((n_nodes, n_nodes))
                 E_j[u, u] = E_j[v, v] = 1
                 E_j[u, v] = E_j[v, u] = -1
+
                 dP_full_dj = (-1.0 / l_j) * E_j
                 dP_cc_dj = dP_full_dj[np.ix_(idx_c, idx_c)]
-                logdet_j = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_dj))
-                                      - np.trace(P_cc_inv @ dP_cc_dj))
-                # trace part
+
+                logdet_j = -0.5 * f_eff * (
+                    np.trace(np.linalg.solve(P_full, dP_full_dj)) -
+                    np.trace(P_cc_inv @ dP_cc_dj)
+                )
+
                 dP_ee = dP_full_dj[np.ix_(idx_e, idx_e)]
                 dP_ec = dP_full_dj[np.ix_(idx_e, idx_c)]
                 dP_ce = dP_full_dj[np.ix_(idx_c, idx_e)]
-                trace_j = 0.5 * f_eff * (np.trace(S @ dP_ee)
-                                     - np.trace(N @ dP_ce)
-                                     - np.trace(S @ dP_ec @ M)
-                                     + np.trace(N @ dP_cc_dj @ M))
+
+                trace_j = 0.5 * f_eff * (
+                    np.trace(S @ dP_ee)
+                    - np.trace(N @ dP_ce)
+                    - np.trace(S @ dP_ec @ M)
+                    + np.trace(N @ dP_cc_dj @ M)
+                )
                 
                 if PRIOR == 'exp':
                     grad[j] = logdet_j + trace_j + (BETA * l_j)
                 elif PRIOR == 'gamma':
                     grad[j] = logdet_j + trace_j + (BETA * l_j - (ALPHA - 1))
 
-            # single gradient for the shared internal log-length
+            # shared external length
             E_ext = np.zeros((n_nodes, n_nodes))
-            for e in entity_graph.ext_edges:
-                u, v = e
-                E_ext[u, u] += 1
-                E_ext[v, v] += 1
-                E_ext[u, v] -= 1
-                E_ext[v, u] -= 1
+            for u_gid, v_gid in ordered_ext_edges:
+                u, v = gid_to_idx[u_gid], gid_to_idx[v_gid]
+                E_ext[u, u] += 1.0
+                E_ext[v, v] += 1.0
+                E_ext[u, v] -= 1.0
+                E_ext[v, u] -= 1.0
+
             dP_full_ext = (-1.0 / l_ext) * E_ext
             dP_cc_ext = dP_full_ext[np.ix_(idx_c, idx_c)]
-            logdet_ext = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_ext))
-                                     - np.trace(P_cc_inv @ dP_cc_ext))
+
+            logdet_ext = -0.5 * f_eff * (
+                np.trace(np.linalg.solve(P_full, dP_full_ext)) -
+                np.trace(P_cc_inv @ dP_cc_ext)
+            )
+
             dP_ee_ext = dP_full_ext[np.ix_(idx_e, idx_e)]
             dP_ec_ext = dP_full_ext[np.ix_(idx_e, idx_c)]
             dP_ce_ext = dP_full_ext[np.ix_(idx_c, idx_e)]
-            trace_ext = 0.5 * f_eff * (np.trace(S @ dP_ee_ext)
-                                   - np.trace(N @ dP_ce_ext)
-                                   - np.trace(S @ dP_ec_ext @ M)
-                                   + np.trace(N @ dP_cc_ext @ M))
-            
+
+            trace_ext = 0.5 * f_eff * (
+                np.trace(S @ dP_ee_ext)
+                - np.trace(N @ dP_ce_ext)
+                - np.trace(S @ dP_ec_ext @ M)
+                + np.trace(N @ dP_cc_ext @ M)
+            )
+
+            idx_shared = len(ordered_int_edges)
             if PRIOR == 'exp':
-                grad[len(entity_graph.int_edges)] = (logdet_ext + trace_ext + (BETA * l_ext * len(entity_graph.ext_edges)))
+                grad[idx_shared] = logdet_ext + trace_ext + (BETA * l_ext * len(ordered_ext_edges))
             elif PRIOR == 'gamma':
-                grad[len(entity_graph.int_edges)] = (logdet_ext + trace_ext + (BETA * l_ext - (ALPHA-1)) * len(entity_graph.ext_edges))
+                grad[idx_shared] = logdet_ext + trace_ext + (BETA * l_ext - (ALPHA - 1)) * len(ordered_ext_edges)
 
         elif tied == 'none':
-            # untied: one length per edge
-            for j, (u, v) in enumerate(ordered_edges):
+            # each edge has its own parameter
+            for j, (u_gid, v_gid) in enumerate(ordered_edges):
+                u, v = gid_to_idx[u_gid], gid_to_idx[v_gid]
                 l_j = edge_lengths[j]
-                # Create the elementary Laplacian matrix E_j for the j-th edge.
-                # This is the derivative of the full Laplacian w.r.t w_j.
+
                 E_j = np.zeros((n_nodes, n_nodes))
-                E_j[u, u], E_j[v, v] = 1, 1
-                E_j[u, v], E_j[v, u] = -1, -1
-                # Derivative of P_full w.r.t log(l_j)
+                E_j[u, u] = E_j[v, v] = 1.0
+                E_j[u, v] = E_j[v, u] = -1.0
+
                 dP_full_dlogl_j = (-1.0 / l_j) * E_j
-                # Log-determinant gradient part
                 dP_cc_dlogl_j = dP_full_dlogl_j[np.ix_(idx_c, idx_c)]
-                logdet_grad_j = -0.5 * f_eff * (np.trace(np.linalg.solve(P_full, dP_full_dlogl_j)) - np.trace(P_cc_inv @ dP_cc_dlogl_j))
-                # Trace gradient part
+
+                logdet_grad_j = -0.5 * f_eff * (
+                    np.trace(np.linalg.solve(P_full, dP_full_dlogl_j)) -
+                    np.trace(P_cc_inv @ dP_cc_dlogl_j)
+                )
+
                 dP_ee_dlogl_j = dP_full_dlogl_j[np.ix_(idx_e, idx_e)]
                 dP_ec_dlogl_j = dP_full_dlogl_j[np.ix_(idx_e, idx_c)]
                 dP_ce_dlogl_j = dP_full_dlogl_j[np.ix_(idx_c, idx_e)]
-                trace_grad_j = 0.5 * f_eff * np.trace(S @ dP_ee_dlogl_j - (N @ dP_ce_dlogl_j) - (S @ dP_ec_dlogl_j @ M) + (N @ dP_cc_dlogl_j @ M))
-                # Total gradient for log_l_j
+
+                trace_grad_j = 0.5 * f_eff * np.trace(
+                    S @ dP_ee_dlogl_j
+                    - (N @ dP_ce_dlogl_j)
+                    - (S @ dP_ec_dlogl_j @ M)
+                    + (N @ dP_cc_dlogl_j @ M)
+                )
+
                 if PRIOR == 'exp':
                     grad[j] = logdet_grad_j + trace_grad_j + (BETA * l_j)
                 elif PRIOR == 'gamma':
                     grad[j] = logdet_grad_j + trace_grad_j + (BETA * l_j - (ALPHA - 1))
 
-        # --- gradient with respect to Sigma (same for tied and untied) ---
+        # gradient with respect to sigma (same for tied and untied)
         dP_dlogsigma_full = np.zeros_like(P_full)
         np.fill_diagonal(dP_dlogsigma_full[:n_ent, :n_ent], -2.0 / (sigma**2))
-        # Log-det grad (derivative of P_cc is zero)
+
         logdet_grad_s = -0.5 * f_eff * np.trace(np.linalg.solve(P_full, dP_dlogsigma_full))
-        # Trace grad (derivative of P_ec, P_ce, P_cc are zero)
         dP_ee_dlogsigma = dP_dlogsigma_full[np.ix_(idx_e, idx_e)]
         trace_grad_s = 0.5 * f_eff * np.trace(S @ dP_ee_dlogsigma)
-        # Total gradient for log_sigma (last element of params)
+
         grad[-1] = logdet_grad_s + trace_grad_s + (BETA * sigma)
 
     except np.linalg.LinAlgError:
@@ -362,8 +446,6 @@ def compute_hessian_from_grad(func, x, epsilon=1e-5, *args, **kwargs):
     """
     finite-difference Hessian via central differences on the gradient.
     
-    func must return (value, gradient) = func(x, *args, **kwargs).
-    
     H_ij = ∂/∂x_j [ ∂f/∂x_i ] ≈ (g_i(x+ε e_j) - g_i(x-ε e_j)) / (2ε)
     where g = grad f.
     """
@@ -371,49 +453,33 @@ def compute_hessian_from_grad(func, x, epsilon=1e-5, *args, **kwargs):
     _, grad0 = func(x, *args, **kwargs)
     n = x.size
     H = np.zeros((n, n), float)
-    
     for j in range(n):
-        dx = np.zeros_like(x)
-        dx[j] = epsilon
-        
+        dx = np.zeros_like(x); dx[j] = epsilon
         _, grad_plus = func(x + dx, *args, **kwargs)
         _, grad_minus = func(x - dx, *args, **kwargs)
-        
-        # central difference for column j of Hessian
         H[:, j] = (grad_plus - grad_minus) / (2 * epsilon)
-    
     return H
 
 
 def laplace_correction(neg_log_posterior,
                        x_mode: np.ndarray,
-                       epsilon: float = np.sqrt(np.finfo(float).eps),
-                       upper_bound: float = None,
-                       bound_margin: float = 5.0):
+                       epsilon: float = np.sqrt(np.finfo(float).eps)):
     """
     compute the Laplace-approximation correction term
       ½ d log(2π) + ½ log det Cov
     where Cov = [-H]^{-1}, H = ∇² log posterior at x_mode.
     
     """
-    # H_neg = ∇²(neg_log_posterior)
-    # the Hessian of the log posterior is H_log_post = -H_neg
-    # We need H = -H_log_post = H_neg to be positive definite.
     H = compute_hessian_from_grad(neg_log_posterior, x_mode, epsilon)
     d = H.shape[0]
-    
     try:
         # use Cholesky decomposition to find the log-determinant.
         # this fails if H is not positive definite.
         L = np.linalg.cholesky(H)
         log_det_H = 2 * np.sum(np.log(np.diag(L)))
-    
         correction = 0.5 * (d * np.log(2 * np.pi) - log_det_H)
         return correction
-
     except np.linalg.LinAlgError:
-        # This is the crucial part: if Cholesky fails, H is not positive definite.
-        # The optimizer likely found a saddle point, not a true maximum.
         warnings.warn(
             "Hessian is not positive definite at the found mode. "
             "The Laplace approximation is invalid. The optimiser may not have converged to a true maximum. "
@@ -441,10 +507,16 @@ def log_marginal_likelihood(data: np.ndarray,
         return neg_log_posterior(x, data, entity_graph, tied='none', is_similarity=is_similarity, return_grad=True)
 
     # tied phase: optimise single length + sigma
-    res_tied = minimize(obj_tied,
-               x0=np.log([1.0, 1.0]),
-               method="L-BFGS-B",
-               jac=True)
+    x0_tied = np.log([1.0, 1.0])
+    bounds_tied = [(LOG_L_MIN, None), (LOG_SIG_MIN, None)]
+    res_tied = minimize(
+        obj_tied,
+        x0_tied,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds_tied
+    )
+
     if not res_tied.success:
         warnings.warn(f"Tied optimisation did not converge: {res_tied.message}")
     log_l_tied, log_sigma_tied = res_tied.x
@@ -453,16 +525,23 @@ def log_marginal_likelihood(data: np.ndarray,
     # test_gradient_parts(data, entity_graph)
 
     if not tied_only:
-        # untied phase
+        # untied phase: optimise one log_l per edge + log_sigma
+
         # if form.name == 'tree':
         #     init_untied = np.concatenate([np.full(len(entity_graph.int_edges)+1, log_l_tied), [log_sigma_tied]])
         # else:
-        ordered_edges = sorted(list(entity_graph.all_edges_global))
-        init_untied = np.concatenate([np.full(len(entity_graph.all_edges_global), log_l_tied), [log_sigma_tied]])
-        res_untied = minimize(obj_untied,
-               x0=init_untied,
-               method="L-BFGS-B",
-               jac=True)
+        ordered_edges = sorted(entity_graph.edges, key=edge_sort_key)
+
+        init_untied = np.concatenate([np.full(len(ordered_edges), log_l_tied), [log_sigma_tied]])
+        bounds_untied = [(LOG_L_MIN, None)] * len(ordered_edges) + [(LOG_SIG_MIN, None)]
+        res_untied = minimize(
+            obj_untied,
+            x0=init_untied,
+            method="L-BFGS-B",
+            jac=True,
+            bounds=bounds_untied
+        )
+
         if not res_untied.success:
             warnings.warn(f"Untied optimisation did not converge: {res_untied.message}")
 
@@ -481,9 +560,6 @@ def log_marginal_likelihood(data: np.ndarray,
         params = {
             "tied": {"log_l": log_l_tied, "log_sigma": log_sigma_tied},
             "untied": {"log_ls": log_l_dict, "log_sigma": res_untied.x[-1]},
-            # "n_edges": n_edges,
-            # "laplace_correction": laplace_corr,
-            # "log_posterior_mode": log_posterior_mode,
         }
 
         if not math.isinf(log_marginal):
@@ -493,9 +569,6 @@ def log_marginal_likelihood(data: np.ndarray,
     
     params = {
         "tied": {"log_l": log_l_tied, "log_sigma": log_sigma_tied},
-        # "n_edges": n_edges,
-        # "laplace_correction": laplace_corr,
-        # "log_posterior_mode": log_posterior_mode,
     }
     
     x_star = res_tied.x
@@ -517,7 +590,7 @@ def test_full_gradient(D: np.ndarray, entity_graph: EntityGraph):
     """
     # Data and graph
     eg = entity_graph
-    ordered_edges = sorted(list(eg.all_edges))
+    ordered_edges = sorted(list(eg.edges), key=edge_sort_key)
     n_edges = len(ordered_edges)
 
     # Prepare initial points in log-space

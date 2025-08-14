@@ -2,6 +2,8 @@
 __pycache__/
 logs/
 plots/
+.DS_Store
+.gitignore
 
 outline_of_matlab.pages
 

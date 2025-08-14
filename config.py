@@ -15,5 +15,3 @@ PARTNERS_PER = 2 # number of members to pair with each when creating seed pairs 
 PRIOR = 'gamma' 
 BETA = 0.4 # rate
 ALPHA = 2 # shape
-
-

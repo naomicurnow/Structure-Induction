@@ -4,7 +4,7 @@ import random
 import numpy as np
 from scoring import find_score
 from graphs_and_forms import ClusterGraph, ProductClusterGraph
-from typing import Set
+from typing import Set, Optional, Dict, List
 from config import EPSILON
 import copy
 
@@ -19,26 +19,11 @@ def simplify_graph(G) -> ClusterGraph:
       (c) if tree: if a parent has ≥2 children that each have exactly 1 entity, merge two of them
           else (non-product graphs): if a node has one neighbour + 1 entity, move it to the neighbour and delete
 
-    After *each* successful change the graph is normalised/updated.
+    After each successful change the graph is normalised/updated.
     If one rule returns no change in a round, mark that rule "finished" and only try the other two next.
     Continue until all three rules make no change.
     """
-    def refresh_product_index_maps(product):
-        # rebuild _row_gid/_col_gid and reverse maps after any row/col change
-        gid = 0
-        product._row_gid = {}
-        for r in product.row_graph.order:
-            product._row_gid[r] = gid
-            gid += 1
-        product._col_gid = {}
-        for c in product.col_graph.order:
-            product._col_gid[c] = gid
-            gid += 1
-        product._gid_to_row = {g: r for r, g in product._row_gid.items()}
-        product._gid_to_col = {g: c for c, g in product._col_gid.items()}
-
     def sync(axis: str, assignments: np.ndarray):
-        # keep productgraph and subgraphs aligned
         if axis == "row":
             G.row_assignments = assignments
             G.row_graph.entity_assignments = assignments
@@ -60,7 +45,6 @@ def simplify_graph(G) -> ClusterGraph:
         #     return False
         
         counts = G.entity_counts()
-
         for lid in G.latent_adjacency.keys():
             if counts.get(lid, 0) != 0:
                 continue
@@ -83,12 +67,10 @@ def simplify_graph(G) -> ClusterGraph:
             If a node has exactly one neighbour and exactly one entity, move its entity to the neighbour and delete the node.
         """
         if G.__class__.__name__ == "TreeClusterGraph":
-            # TreeClusterGraph: use internal/leaf sets
             counts = G.entity_counts()
-            for p in list(getattr(G, "internal_ids", set())):
+            for p in list(G.internal_ids):
                 # children are leaf neighbours
-                kids = [c for c in G.latent_adjacency.get(p, set())
-                        if c in getattr(G, "leaf_ids", set())]
+                kids = [c for c in G.latent_adjacency.get(p, set()) if c in G.leaf_ids]
                 ones = [c for c in kids if counts.get(c, 0) == 1]
                 if len(ones) >= 2:
                     c1, c2 = ones[0], ones[1]
@@ -98,7 +80,6 @@ def simplify_graph(G) -> ClusterGraph:
                     neighs = set(G.latent_adjacency.get(c2, set())) - {c1}
                     G.add_edges([(c1, n) for n in neighs])
                     G.remove_latents([c2])
-                    # keep metadata coherent: c2 was a leaf
                     G.leaf_ids.discard(c2)
                     G.normalise()
                     return True
@@ -129,7 +110,6 @@ def simplify_graph(G) -> ClusterGraph:
                 graph.remove_latents([lid])
                 graph.normalise()
                 sync(axis, assignments)
-                refresh_product_index_maps(G)
                 return True
         return False
 
@@ -152,7 +132,6 @@ def simplify_graph(G) -> ClusterGraph:
             graph.remove_latents([lid])
             graph.normalise()
             sync(axis, assignments)
-            refresh_product_index_maps(G)
             return True
         return False
     
@@ -176,12 +155,7 @@ def simplify_graph(G) -> ClusterGraph:
                 # else: keep trying the remaining enabled rules in next round
         return G
     
-    RULES = (
-        lambda g: rule_a(g),
-        lambda g: rule_b(g),
-        lambda g: rule_c(g),
-    )
-
+    RULES = (rule_a, rule_b, rule_c)
     not_changing: Set[int] = set()
     while True:
         # try each rule once per round unless didn't change last round
@@ -203,11 +177,10 @@ def simplify_graph(G) -> ClusterGraph:
 
 def refine_graph_topology(current, current_score, form, data, is_similarity, near_k=4, radius=None):
     """
-    Post-selection local refinements:
-      (a) within-component moving/swapping (all graph types; product uses component chains)
-      (b) tree/hierarchy reattachments (best-effort: works if the form is a tree/hierarchy)
-      (c) product-only: (i) attempt dimension collapse; (ii) full-graph moves/swaps
-    Returns: (best_graph, best_score, near_misses[list of (graph,score)])
+    Try different ways to change to graph topology to see if it improves the score:
+      (a) moving/swapping entities between nodes
+      (b) tree/hierarchy reattachments
+      (c) product-only: (i) attempt dimension collapse; (ii) moves/swaps on the product graph
     """
     best_graph = simplify_graph(current)
     best_score = current_score
@@ -219,14 +192,13 @@ def refine_graph_topology(current, current_score, form, data, is_similarity, nea
             best_graph, best_score = g, s
         else:
             all_near_misses.append((g, s))
-            # keep only top-k near misses
             all_near_misses = nlargest(near_k, all_near_misses, key=lambda x: x[1])
 
     # movement/swaps of entities from one cluster to another
     # if product graph, only do this within a component
     if isinstance(best_graph, ProductClusterGraph):
         order = ['row', 'col']
-        random.shuffle(order)  # randomise whether row or col first
+        random.shuffle(order)
         for ax in order:
             graph_ax, score_ax, near_misses_ax = move_and_swap_entities_for_product_graph(
                 best_graph, best_score, form, data, is_similarity,
@@ -245,9 +217,9 @@ def refine_graph_topology(current, current_score, form, data, is_similarity, nea
         consider(graph, score)
         all_near_misses.extend(near_misses)
 
-    # product-only passes
+    # product-only
     if isinstance(best_graph, ProductClusterGraph):
-        # (i) try dimension collapse on rows and cols
+        # try dimension collapse on rows and cols
         order = ['row', 'col']
         random.shuffle(order)  # randomise whether row or col first
         for ax in order:
@@ -258,48 +230,17 @@ def refine_graph_topology(current, current_score, form, data, is_similarity, nea
             consider(graph_ax, score_ax)
             all_near_misses.extend(near_misses_ax)
 
-        # lift a product-graph candidate back to a ProductClusterGraph
-        def _lift_product_to_grid(prod_cand, template_grid):
-            rows = template_grid.row_graph.order
-            cols = template_grid.col_graph.order
-            # make a mapping from product lid -> (row_id, col_id)
-            lid_to_cell = {}
-            lid = 0
-            for r in rows:
-                for c in cols:
-                    lid_to_cell[lid] = (r, c)
-                    lid += 1
-
-            new_row = template_grid.row_assignments.copy()
-            new_col = template_grid.col_assignments.copy()
-            for i, L in enumerate(prod_cand.entity_assignments):
-                if L == -1:
-                    continue
-                r, c = lid_to_cell[int(L)]
-                new_row[i] = r
-                new_col[i] = c
-
-            lifted = template_grid.copy()
-            lifted.update_entity_assignments(list(zip(new_row.tolist(), new_col.tolist())))
-            lifted = simplify_graph(lifted)
-            return lifted
-
-        # build current product graph
-        prod = best_graph.form_cartesian_product()  # -> ClusterGraph over grid cells
-
         # run the regular (non-product) moves/swaps on the product graph
+        prod = best_graph.form_cartesian_product()
         prod_best, prod_best_score, prod_near = move_and_swap_entities(
             prod, best_score, form, data, is_similarity, radius=radius
         )
-
-        # lift the best candidate back to ProductClusterGraph and score
-        lifted_best = _lift_product_to_grid(prod_best, best_graph)
+        lifted_best = product_to_ProductClusterGraph(prod_best, best_graph)
         s_lifted_best = fast_score(lifted_best, form, data, is_similarity)
         consider(lifted_best, s_lifted_best)
 
-        # also lift a few near-misses
         for pcand, ps in prod_near[:4]:
-            lifted = _lift_product_to_grid(pcand, best_graph)
+            lifted = product_to_ProductClusterGraph(pcand, best_graph)
             s_lifted = fast_score(lifted, form, data, is_similarity)
             all_near_misses.append((lifted, s_lifted))
 
@@ -313,15 +254,51 @@ def refine_graph_topology(current, current_score, form, data, is_similarity, nea
     return best_graph, best_score, all_near_misses
 
 
+def product_to_ProductClusterGraph(prod_cand, template_grid):
+    # axis maps: local axis lids <-> global axis ids
+    row_lid_to_rgid = template_grid.row_graph.latent_lid_to_cid
+    col_lid_to_cgid = template_grid.col_graph.latent_lid_to_cid
+    rgid_to_row_lid = {rgid: lid for lid, rgid in row_lid_to_rgid.items()}
+    cgid_to_col_lid = {cgid: lid for lid, cgid in col_lid_to_cgid.items()}
+
+    # product map: prod local lid -> (rgid, cgid)
+    prod_lid_to_pair = getattr(prod_cand, "latent_lid_to_cid", None)
+    if prod_lid_to_pair is None:
+        # legacy fallback (shouldn't happen with the new product code)
+        raise TypeError("Product ClusterGraph lacks latent_lid_to_cid mapping.")
+
+    # start from current assignments; overwrite where prod_cand moved things
+    new_row = template_grid.row_assignments.copy()
+    new_col = template_grid.col_assignments.copy()
+
+    for i, plid in enumerate(prod_cand.entity_assignments):
+        if plid == -1:
+            continue
+        rgid, cgid = prod_lid_to_pair[int(plid)]
+        r_lid = rgid_to_row_lid[rgid]
+        c_lid = cgid_to_col_lid[cgid]
+        new_row[i] = r_lid
+        new_col[i] = c_lid
+
+    prod_cand.metadata['row_graph'] = template_grid.row_graph
+    prod_cand.metadata['col_graph'] = template_grid.col_graph
+    prod_cand.metadata['row_assignments'] = new_row
+    prod_cand.metadata['col_assignments'] = new_col
+
+    # ensure entity ids present for the undo
+    prod_cand.entity_idx_to_eid = {int(i): int(template_grid.entity_idx_to_eid[i])
+                                    for i in range(template_grid.n_entities())}
+
+    lifted = prod_cand.undo_cartesian_product()
+    lifted = simplify_graph(lifted)
+    return lifted
+
+
 def fast_score(graph, form, data, is_similarity):
     score, opt_params = find_score(graph, form, data, is_similarity, speed='fast')
     graph.metadata.setdefault("opt_params", {}).update(opt_params)
     return score
 
-
-# =========================
-# Helpers for (a)
-# =========================
 
 def move_and_swap_entities_for_product_graph(G: ProductClusterGraph, base_score, form, data, is_similarity,
                                 axis: str, radius=None):
@@ -344,8 +321,8 @@ def move_and_swap_entities_for_product_graph(G: ProductClusterGraph, base_score,
         other_assignments = current_graph.col_assignments if axis == 'row' else current_graph.row_assignments
 
         adj = chain.latent_adjacency
-        nodes = list(chain.latent_nodes)
-        within_k = {u: _within_k(adj, u, radius) for u in nodes}
+        nodes = list(chain.latent_ids)
+        within_k = {u: nodes_within_k(adj, u, radius) for u in nodes}
 
         counts = {u: int(np.sum(assignments == u)) for u in nodes}
         occupied = [u for u in nodes if counts[u] > 0]
@@ -411,9 +388,7 @@ def move_and_swap_entities_for_product_graph(G: ProductClusterGraph, base_score,
 
 def move_and_swap_entities(G: ClusterGraph, base_score, form, data, is_similarity,
                          radius=None):
-    """
-    moves and swaps.
-    """
+    """Moves and swaps for non-product ClusterGraphs."""
     near_misses = []
     best_graph = G
     best_score = base_score
@@ -424,8 +399,8 @@ def move_and_swap_entities(G: ClusterGraph, base_score, form, data, is_similarit
         improved = False
         current_graph = best_graph
         adj = current_graph.latent_adjacency
-        nodes = list(current_graph.latent_nodes)
-        within_k = {u: _within_k(adj, u, radius) for u in nodes}
+        nodes = list(current_graph.latent_ids)
+        within_k = {u: nodes_within_k(adj, u, radius) for u in nodes}
 
         assigns = current_graph.entity_assignments
         counts = {u: int(np.sum(assigns == u)) for u in nodes}
@@ -437,14 +412,14 @@ def move_and_swap_entities(G: ClusterGraph, base_score, form, data, is_similarit
         for u in occupied:
             # don't allow large structural change by moving all entities away from an internal node in a hierarchy
             # (also true for trees but here internal nodes are unoccupied by definition)
-            if form.name == 'hierarchy' and u not in list(current_graph.leaf_nodes): continue 
+            if form.name == 'hierarchy' and u not in list(current_graph.leaf_ids()): continue 
 
             neighs = sorted(within_k[u])
             random.shuffle(neighs)
             for v in neighs:
                 if v == u:
                     continue
-                if form.name == 'tree' and v not in list(current_graph.leaf_nodes): continue
+                if form.name == 'tree' and v not in list(current_graph.leaf_ids): continue
                 cand = current_graph.copy()
                 na = cand.entity_assignments.copy()
                 na[assigns == u] = v
@@ -483,7 +458,7 @@ def move_and_swap_entities(G: ClusterGraph, base_score, form, data, is_similarit
     return best_graph, best_score, near_misses
 
 
-def _within_k(adj, start, k=None):
+def nodes_within_k(adj, start, k=None):
     """
     Return nodes within <= k hops of `start` (including neighbours, excluding start).
 
@@ -509,14 +484,10 @@ def _within_k(adj, start, k=None):
     return out
 
 
-# =========================
-# (b) Tree/Hierarchy reattachments (best-effort)
-# =========================
-
 def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
     """
     For trees (nodes+entities): reparent entities under any leaf; and move subtree roots.
-    For hierarchies (nodes only): try reattaching nodes (no entity moves here).
+    For hierarchies (nodes only): try reattaching nodes (no entity moves).
     """
     near_misses = []
     best_graph = G
@@ -528,35 +499,33 @@ def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
 
         improved = False
         G = best_graph
-        leaves = G.leaf_nodes
-        assigns = G.entity_assignments
 
         # (entities) reparent under any leaf — move all entities from leaf a to leaf b
-        if form.name == 'tree':
-            # work over entities, not leaves
-            entity_idxs = [int(i) for i in np.where(assigns != -1)[0].tolist()]
-            random.shuffle(entity_idxs)
+        # if form.name == 'tree':
+        #     # work over entities, not leaves
+        #     entity_idxs = [int(i) for i in np.where(assigns != -1)[0].tolist()]
+        #     random.shuffle(entity_idxs)
 
-            for idx in entity_idxs:
-                u = int(assigns[idx]) # current leaf of this entity
+        #     for idx in entity_idxs:
+        #         u = int(assigns[idx]) # current leaf of this entity
 
-                # all possible destinations: any other leaf
-                dests = list(leaves - {u})
-                random.shuffle(dests)
+        #         # all possible destinations: any other leaf
+        #         dests = list(leaves - {u})
+        #         random.shuffle(dests)
 
-                for v in dests:
-                    # (explicitly avoids moving to internals because v ∈ leaf_set)
-                    cand = G.copy()
-                    na = cand.entity_assignments.copy()
-                    na[idx] = v
-                    cand.update_entity_assignments(na)
-                    cand = simplify_graph(cand)
-                    s = fast_score(cand, form, data, is_similarity)
-                    if s > best_score + EPSILON:
-                        improved = True
-                        best_graph, best_score = cand, s
-                    else:
-                        near_misses.append((cand, s))
+        #         for v in dests:
+        #             # (explicitly avoids moving to internals because v ∈ leaf_set)
+        #             cand = G.copy()
+        #             na = cand.entity_assignments.copy()
+        #             na[idx] = v
+        #             cand.update_entity_assignments(na)
+        #             cand = simplify_graph(cand)
+        #             s = fast_score(cand, form, data, is_similarity)
+        #             if s > best_score + EPSILON:
+        #                 improved = True
+        #                 best_graph, best_score = cand, s
+        #             else:
+        #                 near_misses.append((cand, s))
 
         def subtree_nodes(G, root: int) -> Set[int]:
             """Collect root plus all descendants using children map."""
@@ -570,8 +539,8 @@ def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
                         stack.append(c)
             return out
 
-        # (nodes) move a "subtree" rooted at u by reconnecting u to a different t
-        nodes = list(G.latent_nodes)
+        # (nodes) move a subtree rooted at u by reconnecting u to a different t
+        nodes = list(G.latent_ids)
         for u in nodes:
             old_par = G.parent.get(u, None)
             if old_par is None:
@@ -585,7 +554,7 @@ def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
             random.shuffle(candidates)
 
             for t in candidates:
-                if form.name == 'tree' and t not in list(G.internal_nodes): continue
+                if form.name == 'tree' and t not in list(G.internal_ids): continue
                 cand = G.copy()
 
                 # detach u from old parent in adjacency
@@ -613,62 +582,67 @@ def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
     return best_graph, best_score, near_misses
 
 
-# =========================
-# (c) Product-only passes
-# =========================
 
 def collapse_dimension(G: ProductClusterGraph, base_score, form, data,
                                    is_similarity, axis: str):
     """
-    (c)(i) Try to collapse dimensions by effectively removing one node from a row/col chain:
+    Try to collapse dimensions by effectively removing one node from a row/col chain:
       - For a candidate row/col r with >=1 entities, if the full graph has more empty cells
         than the number of occupied cells in r's row/col, reassign those entities into
         nearest empty cells (in product space), then drop the component node.
-    Uses FAST (untied) scoring via params for speed.
     """
     assert axis in ('row', 'col')
     near_misses = []
     best_graph = G
     best_score = base_score
 
-    # Build product graph + counts
     product = G.form_cartesian_product()
-    counts = product.entity_counts()
+    counts = product.entity_counts() # product local lid -> count
 
-    rows = G.row_graph.order
-    cols = G.col_graph.order
-    cell_to_lid = {}
-    lid_to_cell = {}
-    lid = 0
-    for r in rows:
-        for c in cols:
-            cell_to_lid[(r, c)] = lid
-            lid_to_cell[lid] = (r, c)
-            lid += 1
+    # axis maps: local lid <-> global axis id
+    row_lid_to_rgid = G.row_graph.latent_lid_to_cid
+    col_lid_to_cgid = G.col_graph.latent_lid_to_cid
+    rgid_to_row_lid = {rgid: lid for lid, rgid in row_lid_to_rgid.items()}
+    cgid_to_col_lid = {cgid: lid for lid, cgid in col_lid_to_cgid.items()}
 
-    # precompute empty cells
-    empty_cells = [L for L, k in counts.items() if k == 0]
+    # product mapping: product local lid -> (rgid, cgid)
+    prod_lid_to_pair = product.latent_lid_to_cid  # {plid: (rgid, cgid)}
 
-    # Manhattan distance
-    def manhattan(l1, l2):
-        (r1, c1) = lid_to_cell[l1]; (r2, c2) = lid_to_cell[l2]
-        return abs(r1 - r2) + abs(c1 - c2)
+    adj = product.latent_adjacency
+
+    def shortest_target(srcL: int, allowed_targets: Set[int]) -> Optional[int]:
+        """Return the closest target (by BFS hops) among allowed_targets; None if unreachable."""
+        if srcL in allowed_targets:
+            return srcL
+        seen = {srcL}
+        q = deque([srcL])
+        while q:
+            u = q.popleft()
+            for v in adj.get(u, ()):
+                if v in seen:
+                    continue
+                if v in allowed_targets:
+                    return v
+                seen.add(v)
+                q.append(v)
+        return None
 
     # candidates in this axis
     chain_nodes = (G.row_graph.order if axis == 'row' else G.col_graph.order)
 
     for node in chain_nodes:
-        # entities attached to this row / col
         if axis == 'row':
+            rgid = row_lid_to_rgid[node]
+            # line cells: all product lids whose row id equals this rgid
+            line_cells = [plid for plid, (rgi, cgi) in prod_lid_to_pair.items() if rgi == rgid]
             members = np.where(G.row_assignments == node)[0]
-            line_cells = [cell_to_lid[(node, c)] for c in cols]
-            # exclude empty cells in the *same row* from the target pool
-            allowed_empty = [L for L in empty_cells if lid_to_cell[L][0] != node]
+            # empty targets outside this row
+            allowed_empty = {plid for plid, k in counts.items() if k == 0 and prod_lid_to_pair[plid][0] != rgid}
         else:
+            cgid = col_lid_to_cgid[node]
+            line_cells = [plid for plid, (rgi, cgi) in prod_lid_to_pair.items() if cgi == cgid]
             members = np.where(G.col_assignments == node)[0]
-            line_cells = [cell_to_lid[(r, node)] for r in rows]
-            # exclude empty cells in the *same col* from the target pool
-            allowed_empty = [L for L in empty_cells if lid_to_cell[L][1] != node]
+            allowed_empty = {plid for plid, k in counts.items() if k == 0 and prod_lid_to_pair[plid][1] != cgid}
 
         if members.size == 0:
             continue
@@ -676,33 +650,43 @@ def collapse_dimension(G: ProductClusterGraph, base_score, form, data,
         # source product cells on this line that actually have entities
         source_cells = [L for L in line_cells if counts.get(L, 0) > 0]
 
-        # need at least one empty target per *source cell*
+        # need at least one empty target per source cell
         if len(allowed_empty) < len(source_cells):
             continue
 
         # assign empty target per source cell (move all entities from source to same cell), greedy by nearest
         working_empty = set(allowed_empty)
-        mapping = {}  # source_lid -> target_lid
+        mapping = {}  # source_plid -> target_plid
         random.shuffle(source_cells)
+        feasible = True
         for src in source_cells:
-            # choose nearest currently-empty cell outside this component
-            target = min(working_empty, key=lambda L: manhattan(src, L))
-            working_empty.remove(target)
-            mapping[src] = target
+            tgt = shortest_target(src, working_empty)
+            if tgt is None:
+                feasible = False
+                break
+            mapping[src] = tgt
+            working_empty.remove(tgt)
+
+        if not feasible or not mapping:
+            continue
 
         # apply the batch reassignment
         cand = G.copy()
         new_row = cand.row_assignments.copy()
         new_col = cand.col_assignments.copy()
 
-        for src_lid, tgt_lid in mapping.items():
-            rs, cs = lid_to_cell[src_lid]
-            rt, ct = lid_to_cell[tgt_lid]
-            # all entities currently in (rs, cs) move together to (rt, ct)
-            idxs = np.where((G.row_assignments == rs) & (G.col_assignments == cs))[0]
+        for src_plid, tgt_plid in mapping.items():
+            rs_gid, cs_gid = prod_lid_to_pair[src_plid]
+            rt_gid, ct_gid = prod_lid_to_pair[tgt_plid]
+            rs_lid = rgid_to_row_lid[rs_gid]
+            cs_lid = cgid_to_col_lid[cs_gid]
+            rt_lid = rgid_to_row_lid[rt_gid]
+            ct_lid = cgid_to_col_lid[ct_gid]
+            # move all entities currently in (rs_lid, cs_lid) together to (rt_lid, ct_lid)
+            idxs = np.where((G.row_assignments == rs_lid) & (G.col_assignments == cs_lid))[0]
             if idxs.size:
-                new_row[idxs] = rt
-                new_col[idxs] = ct
+                new_row[idxs] = rt_lid
+                new_col[idxs] = ct_lid
 
         cand.update_entity_assignments(list(zip(new_row.tolist(), new_col.tolist())))
 
@@ -723,15 +707,7 @@ def move_individual_entities_for_product_graph(
     G, base_score, form, data, is_similarity, near_k=4, radius=3
 ):
     """
-    Product-level *individual* moves:
-      - Build the product ClusterGraph (grid cells as latent nodes).
-      - For each occupied product cell, and for each entity in that cell,
-        try moving it to any product cell within `radius` hops (default 3).
-      - If a move improves the score, accept immediately and restart (greedy hill-climb).
-      - Destination filter: if the candidate graph exposes `leaf_nodes` (tree-like),
-        do not move into non-leaf (internal) nodes.
-
-    Returns: (best_graph: ProductClusterGraph, best_score: float, near_misses: list[(graph, score)])
+    Moving individual entities between cells in the cartesian product graph.
     """
     near_misses = []
     best_graph = G
@@ -742,56 +718,54 @@ def move_individual_entities_for_product_graph(
         improved = False
         current = best_graph
 
-        # --- product graph + mappings ---
-        prod = current.form_cartesian_product()  # -> ClusterGraph over product cells
-        assigns_prod = prod.entity_assignments  # length n_entities, each is a product lid or -1
+        prod = current.form_cartesian_product()
+        assigns_prod = prod.entity_assignments
 
-        # map product lid <-> (row_id, col_id) using current row/col orders
-        rows = current.row_graph.order
-        cols = current.col_graph.order
-        lid_to_cell = {}
-        cell_to_lid = {}
-        lid = 0
-        for r in rows:
-            for c in cols:
-                lid_to_cell[lid] = (r, c)
-                cell_to_lid[(r, c)] = lid
-                lid += 1
+        row_lid_to_rgid = current.row_graph.latent_lid_to_cid
+        col_lid_to_cgid = current.col_graph.latent_lid_to_cid
+        rgid_to_row_lid = {rgid: lid for lid, rgid in row_lid_to_rgid.items()}
+        cgid_to_col_lid = {cgid: lid for lid, cgid in col_lid_to_cgid.items()}
 
-        # adjacency + within-k neighborhoods on the *product* graph
+        # product lid -> (rgid, cgid)
+        lid_to_pair = prod.latent_lid_to_cid
+
+        # adjacency + within-k neighborhoods on the product graph
         adj = prod.latent_adjacency
-        prod_nodes = list(prod.latent_adjacency.keys())
-        within_k = {u: _within_k(adj, u, radius) for u in prod_nodes}
+        prod_nodes = list(adj.keys())
+        within_k = {u: nodes_within_k(adj, u, radius) for u in prod_nodes}
 
         # occupancy: product lid -> list(entity indices)
-        cell_to_entities = {}
+        cell_to_entities: Dict[int, List[int]] = {}
         for i, L in enumerate(assigns_prod.tolist()):
             if L == -1:
                 continue
             cell_to_entities.setdefault(int(L), []).append(i)
 
-        # iterate occupied cells in random order to diversify search
+        # iterate occupied cells in random order
         occupied_cells = list(cell_to_entities.keys())
         random.shuffle(occupied_cells)
 
         accepted_this_round = False
 
-        for srcL in occupied_cells:
+        for src in occupied_cells:
             # neighbors within radius (exclude staying put)
-            nbrs = sorted(within_k.get(srcL, set()))
+            nbrs = sorted(within_k.get(src, set()))
             random.shuffle(nbrs)
 
-            src_entities = cell_to_entities.get(srcL, [])
+            src_entities = cell_to_entities.get(src, [])
             if not src_entities:
                 continue
 
             for i in src_entities:
-                for dstL in nbrs:
-                    if dstL == srcL:
+                for dst in nbrs:
+                    if dst == src:
                         continue
 
-                    # move single entity i to dstL = (rt, ct)
-                    rt, ct = lid_to_cell[dstL]
+                    # map dst -> (rgid, cgid) -> (row_lid, col_lid)
+                    rgid_t, cgid_t = lid_to_pair[dst]
+                    rt = rgid_to_row_lid[rgid_t]
+                    ct = cgid_to_col_lid[cgid_t]
+
                     cand = current.copy()
                     new_row = cand.row_assignments.copy()
                     new_col = cand.col_assignments.copy()
@@ -815,7 +789,7 @@ def move_individual_entities_for_product_graph(
             if accepted_this_round:
                 break
 
-        # if no candidate improved, we will exit outer while; else loop again with updated best_graph
+        # if no candidate improved, exit outer while; else loop again with updated best_graph
 
     near_misses = nlargest(near_k, near_misses, key=lambda x: x[1])
     return best_graph, best_score, near_misses
@@ -825,16 +799,6 @@ def move_individual_entities(
     G, base_score, form, data, is_similarity, near_k=4, radius=3
 ):
     """
-    Non-product *individual* moves on a ClusterGraph/Hierarchy/Tree/etc.
-
-    Algo:
-      - For each occupied latent node u, for each entity i at u,
-        try moving i to any node within <= `radius` hops (via latent adjacency).
-      - If a move improves the score, accept immediately and restart (greedy).
-      - Destination filter: if the graph exposes `leaf_nodes` (tree),
-        only allow destinations in leaves.
-
-    Returns: (best_graph, best_score, near_misses[list of (graph,score)])
     """
     if form.name in ('grid', 'cylinder'):
         return move_individual_entities_for_product_graph(G, base_score, form, data, is_similarity, near_k, radius)
@@ -848,10 +812,9 @@ def move_individual_entities(
         improved = False
         current = best_graph
 
-        # adjacency + within-k on current graph
         adj = current.latent_adjacency
-        nodes = list(current.latent_nodes)
-        within_k = {u: _within_k(adj, u, radius) for u in nodes}
+        nodes = list(current.latent_ids)
+        within_k = {u: nodes_within_k(adj, u, radius) for u in nodes}
 
         assigns = current.entity_assignments
         counts = current.entity_counts()
@@ -871,15 +834,13 @@ def move_individual_entities(
 
             # all entity indices at u
             src_indices = np.where(assigns == u)[0].tolist()
-            if not src_indices:
-                continue
 
             for i in src_indices:
                 for v in nbrs:
                     if v == u:
                         continue
 
-                    if form.name == 'tree' and v not in list(current.leaf_nodes): continue
+                    if form.name == 'tree' and v not in list(current.leaf_ids): continue
 
                     cand = current.copy()
                     na = cand.entity_assignments.copy()

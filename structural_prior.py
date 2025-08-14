@@ -9,14 +9,14 @@ from scipy.special import stirling2
 
 
 def log_structural_prior(cluster_graph, form: StructuralForm) -> float:
-    n = cluster_graph.n_entities
+    n = cluster_graph.n_entities()
     form_name = form.name
 
     # find |S|
     if form_name == 'tree': # if tree, |S| is number of leaf nodes
         size_S = len(list(cluster_graph.leaf_ids))
     else: # else, |S| is number of latent nodes
-        size_S = cluster_graph.n_latents
+        size_S = len(cluster_graph.latent_ids)
 
     if form_name == "grid":
         Z = Z_grid(n)
