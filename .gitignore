@@ -1,0 +1,23 @@
+
+__pycache__/
+logs/
+plots/
+
+outline_of_matlab.pages
+
+# ignore everything in data/
+data/*
+
+# …except these:
+!data/animals.mat
+!data/cities.mat
+!data/colors.mat
+!data/demo_chain_feat.mat
+!data/demo_ring_feat.mat
+!data/demo_tree_feat.mat
+!data/faces.mat
+!data/synthchain.mat
+!data/synthgrid.mat
+!data/synthpartition.mat
+!data/synthring.mat
+!data/synthtree.mat
