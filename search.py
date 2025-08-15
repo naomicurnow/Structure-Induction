@@ -161,7 +161,7 @@ def product_cluster_splits(current, base_score, form, data, is_similarity):
             # map the resulting product assignments back into row/col assignments
             # to get a candidate ProductClusterGraph (to keep structure consistent across search).
             moved_assign = moved_prod_graph.entity_assignments
-            moved_lid_to_cell = moved_prod_graph.lid_to_cid_map  # {prod_lid -> (rgid, cgid)}
+            moved_lid_to_cell = moved_prod_graph.latent_lid_to_cid  # {prod_lid -> (rgid, cgid)}
 
             # start from current row/col assignments; overwrite where moved
             new_row_assign = current.row_assignments.copy()
@@ -177,12 +177,12 @@ def product_cluster_splits(current, base_score, form, data, is_similarity):
                 new_col_assign[i] = c_lid
 
             # prepare metadata so undo_cartesian_product can rebuild a consistent ProductClusterGraph
-            moved_prod_graph.metadata['row_graph'] = current.row_graph
-            moved_prod_graph.metadata['col_graph'] = current.col_graph
+            moved_prod_graph.metadata['row_graph'] = current.row_graph.copy()
+            moved_prod_graph.metadata['col_graph'] = current.col_graph.copy()
             moved_prod_graph.metadata['row_assignments'] = new_row_assign
             moved_prod_graph.metadata['col_assignments'] = new_col_assign
 
-            moved_prod_graph.entity_idx_to_eid = {int(i): int(current.entity_idx_to_eid[i]) for i in range(current.n_entities)}
+            moved_prod_graph.entity_idx_to_eid = {int(i): int(current.entity_idx_to_eid[i]) for i in range(current.n_entities())}
 
             # convert back to a ProductClusterGraph candidate
             cand_prod = moved_prod_graph.undo_cartesian_product()

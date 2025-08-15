@@ -1,5 +1,4 @@
 
-
 import math
 import numpy as np
 from functools import lru_cache
@@ -49,7 +48,7 @@ def C_F_k(form_name: str, k: int) -> float:
     elif form_name == "connected":
         return 1.0
     elif form_name == "directed_ring":
-        return math.factorial(k - 1) if k >= 1 else 0.0
+        return math.factorial(k - 1)
     elif form_name == "ring":
         if k <= 2:
             return 1.0
@@ -57,7 +56,7 @@ def C_F_k(form_name: str, k: int) -> float:
     elif form_name == "directed_hierarchy":
         return k ** (k - 1)
     elif form_name == "hierarchy":
-        return k ** (k - 2) if k >= 2 else 1.0
+        return k ** (k - 2)
     elif form_name == "tree":
         # (2k - 5)!! = product of odd numbers up to (2k-5); define for k>=2
         if k < 2:
@@ -65,7 +64,7 @@ def C_F_k(form_name: str, k: int) -> float:
         val = 1
         for t in range(1, k - 1):
             val *= (2 * t - 1)
-        return val  # that's (2k-5)!! when k>=2
+        return val
     else:
         raise ValueError(f"Unknown form {form_name}")
     

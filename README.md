@@ -6,7 +6,18 @@ The aim of this model is to discover the underlying graph structure which best e
 
 ## Set up before running
 
-*** stuff about requirements.txt
+It is recommended that you create a new Conda environment to run this project. To do this, use
+
+```bash
+conda create -n ENV_NAME
+conda activate ENV_NAME
+```
+
+Then install dependencies using
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Tunable parameters
 
@@ -99,4 +110,4 @@ NOTE: I am still playing around with the parameters of the plotting functions, a
 
 ## Start here!
 
-It is recommended that you start by running one of the `demo` files: `demo_chain_feat.mat`, `demo_ring_feat.mat` or `demo_tree_feat.mat`. These are small files so they are relatively fast, and should finish in the order of seconds (depending on the number of forms you test and number of restarts). If these work well, you could then try one of the larger datasets, such as `animals.mat` or `colors.mat` (don't forget the `--use_similarity` tag for the latter!!). Expect these to take the order of minutes to hours (for example, running `animals.mat` on my laptop takes ~15 minutes with one repeat). 
+It is recommended that you start by running one of the `demo` files: `demo_chain_feat.mat`, `demo_ring_feat.mat` or `demo_tree_feat.mat`. These are small files so they are relatively fast, and should finish in the order of seconds (depending on the number of forms you test and number of restarts). If these work well, you could then try one of the larger datasets, such as `animals.mat` or `colors.mat` (don't forget the `--use_similarity` tag for the latter!!). Expect these to take the order of minutes to hours. 

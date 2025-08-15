@@ -1,5 +1,4 @@
 
-
 import numpy as np
 from typing import NamedTuple, List, Tuple, Dict, Set, Optional, Any, Iterable
 import copy
@@ -236,14 +235,18 @@ class ClusterGraph:
         if not self.from_product:
             raise TypeError("Cannot undo cartesian product when the graph was not made by forming one.")
         
+        # keep only opt_params in metadata
+        md = {}
+        md["opt_params"] = copy.deepcopy(self.metadata["opt_params"])
+
         return ProductClusterGraph(
             self.metadata['row_graph'],
             self.metadata['col_graph'],
             self.metadata['row_assignments'],
             self.metadata['col_assignments'],
-            copy.deepcopy(self.metadata),
-            self.entity_idx_to_eid)
-
+            md,
+            self.entity_idx_to_eid
+        )
 
 
 class ChainRingClusterGraph(ClusterGraph):
@@ -374,7 +377,7 @@ class HierarchyClusterGraph(ClusterGraph):
             f"  id_maps={{'entity_idx_to_eid': {self.entity_idx_to_eid}, 'latent_lid_to_cid': {self.latent_lid_to_cid}}},\n"
             f"  parent={parent_str},\n"
             f"  children={children_str},\n"
-            f"  leaf_lids={self.leaf_ids},\n"
+            f"  leaf_lids={self.leaf_ids()},\n"
             f"  entity_assignments[idx->lid]={self.entity_assignments.tolist()},\n"
             f"  latent_adjacency={{{', '.join(f'{k}:{sorted(v)}' for k,v in sorted(self.latent_adjacency.items()))}}},\n"
             f"  metadata={self.metadata}\n"
@@ -543,6 +546,25 @@ class ProductClusterGraph:
             self.col_assignments[i] = c
         self.row_graph.entity_assignments = self.row_assignments
         self.col_graph.entity_assignments = self.col_assignments
+        self.check_assignments()
+
+    def check_assignments(self, *, inplace: bool = True):
+        rows_now = set(int(r) for r in self.row_graph.order)
+        cols_now = set(int(c) for c in self.col_graph.order)
+
+        row = self.row_assignments.astype(int, copy=True)
+        col = self.col_assignments.astype(int, copy=True)
+
+        row[~np.isin(row, list(rows_now))] = -1
+        col[~np.isin(col, list(cols_now))] = -1
+
+        if inplace:
+            self.row_assignments = row
+            self.col_assignments = col
+            self.row_graph.entity_assignments = row
+            self.col_graph.entity_assignments = col
+            return None
+        return row, col
     
     def form_cartesian_product(self) -> ClusterGraph:
         rows = self.row_graph.order  # in local row lids
@@ -591,10 +613,10 @@ class ProductClusterGraph:
                     adj[a].add(b); adj[b].add(a)
 
         metadata = copy.deepcopy(self.metadata)
-        metadata['row_graph'] = self.row_graph
-        metadata['col_graph'] = self.col_graph
-        metadata['row_assignments'] = self.row_assignments
-        metadata['col_assignments'] = self.col_assignments
+        metadata['row_graph'] = self.row_graph.copy()
+        metadata['col_graph'] = self.col_graph.copy()
+        metadata['row_assignments'] = copy.deepcopy(self.row_assignments)
+        metadata['col_assignments'] = copy.deepcopy(self.col_assignments)
         cg = ClusterGraph(new_assign, latent_adjacency=adj, metadata=metadata, from_product=True)
         cg.entity_idx_to_eid = {i: int(self.entity_idx_to_eid[i]) for i in range(self.n_entities())}
         for (_, _, cell_gid) in current_cells:
@@ -924,6 +946,7 @@ class GridForm():
                 metadata=copy.deepcopy(G.metadata),
                 entity_idx_to_eid=dict(G.entity_idx_to_eid)
             )
+            updated_G.check_assignments()
             proposals.append(SplitProposal(updated_G, orphaned, (c1, c2), 'row'))
         # split along cols
         for c in G.col_graph.latent_ids:
@@ -938,6 +961,7 @@ class GridForm():
                 metadata=copy.deepcopy(G.metadata),
                 entity_idx_to_eid=dict(G.entity_idx_to_eid)
             )
+            updated_G.check_assignments()
             proposals.append(SplitProposal(updated_G, orphaned, (c1, c2), 'col'))
         return proposals
 
@@ -968,6 +992,7 @@ class CylinderForm():
                 metadata=copy.deepcopy(G.metadata),
                 entity_idx_to_eid=dict(G.entity_idx_to_eid)
             )
+            updated_G.check_assignments()
             proposals.append(SplitProposal(updated_G, orphaned, (c1, c2), 'row'))
         # split along cols
         for c in G.col_graph.latent_ids:
@@ -982,5 +1007,6 @@ class CylinderForm():
                 metadata=copy.deepcopy(G.metadata),
                 entity_idx_to_eid=dict(G.entity_idx_to_eid)
             )
+            updated_G.check_assignments()
             proposals.append(SplitProposal(updated_G, orphaned, (c1, c2), 'col'))
         return proposals

@@ -6,88 +6,88 @@ import sys
 from pathlib import Path
 import scipy.linalg as la
 import warnings
-from collections import defaultdict
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE  # repo root
 sys.path.append(str(ROOT))
 
-def load_planet_data():
-    planets = [
-        # name, mass_1e24kg, diameter_km, density_kg_m3, gravity_m_s2, escape_km_s,
-        # rotation_h, length_of_day_h, dist_mkm, perihelion_mkm, aphelion_mkm,
-        # orbital_period_d, orbital_velocity_km_s, orbital_incl_deg, orbital_ecc,
-        # obliquity_deg, mean_temp_c, surface_pressure_bar, number_of_moons, ring_system, global_magnetic_field
-        ("Mercury", 0.330, 4879, 5429, 3.7, 4.3, 1407.6, 4222.6, 57.9, 46.0, 69.8, 88.0, 47.4, 7.0, 0.206, 0.034, 167, 0.0, 0, False, True),
-        ("Venus", 4.87, 12104, 5243, 8.9, 10.4, -5832.5, 2802.0, 108.2, 107.5, 108.9, 224.7, 35.0, 3.4, 0.007, 177.4, 464, 92.0, 0, False, False),
-        ("Earth", 5.97, 12756, 5514, 9.8, 11.2, 23.9, 24.0, 149.6, 147.1, 152.1, 365.2, 29.8, 0.0, 0.017, 23.4, 15, 1.0, 1, False, True),
-        ("Mars", 0.642, 6792, 3934, 3.7, 5.0, 24.6, 24.7, 228.0, 206.7, 249.3, 687.0, 24.1, 1.8, 0.094, 25.2, -65, 0.01, 2, False, False),
-        ("Jupiter", 1898.0, 142984, 1326, 23.1, 59.5, 9.9, 9.9, 778.5, 740.6, 816.4, 4331.0, 13.1, 1.3, 0.049, 3.1, -110, np.nan, 95, True, True),
-        ("Saturn", 568.0, 120536, 687, 9.0, 35.5, 10.7, 10.7, 1432.0, 1357.6, 1506.5, 10747.0, 9.7, 2.5, 0.052, 26.7, -140, np.nan, 274, True, True),
-        ("Uranus", 86.8, 51118, 1270, 8.7, 21.3, -17.2, 17.2, 2867.0, 2732.7, 3001.4, 30589.0, 6.8, 0.8, 0.047, 97.8, -195, np.nan, 28, True, True),
-        ("Neptune", 102.0, 49528, 1638, 11.0, 23.5, 16.1, 16.1, 4515.0, 4471.1, 4558.9, 59800.0, 5.4, 1.8, 0.010, 28.3, -200, np.nan, 16, True, True),
-        ("Pluto", 0.0130, 2376, 1850, 0.7, 1.3, -153.3, 153.3, 5906.4, 4436.8, 7375.9, 90560.0, 4.7, 17.2, 0.244, 119.5, -225, 0.00001, 5, False, np.nan)
-    ]
 
-    columns = [
-        "name","mass_1e24kg","diameter_km","density_kg_m3","gravity_m_s2","escape_velocity_km_s",
-        "rotation_period_hours","length_of_day_hours","distance_from_sun_1e6_km","perihelion_1e6_km","aphelion_1e6_km",
-        "orbital_period_days","orbital_velocity_km_s","orbital_inclination_deg","orbital_eccentricity",
-        "obliquity_deg","mean_temperature_c","surface_pressure_bar","number_of_moons","ring_system","global_magnetic_field"
-    ]
+# def load_planet_data():
+#     planets = [
+#         # name, mass_1e24kg, diameter_km, density_kg_m3, gravity_m_s2, escape_km_s,
+#         # rotation_h, length_of_day_h, dist_mkm, perihelion_mkm, aphelion_mkm,
+#         # orbital_period_d, orbital_velocity_km_s, orbital_incl_deg, orbital_ecc,
+#         # obliquity_deg, mean_temp_c, surface_pressure_bar, number_of_moons, ring_system, global_magnetic_field
+#         ("Mercury", 0.330, 4879, 5429, 3.7, 4.3, 1407.6, 4222.6, 57.9, 46.0, 69.8, 88.0, 47.4, 7.0, 0.206, 0.034, 167, 0.0, 0, False, True),
+#         ("Venus", 4.87, 12104, 5243, 8.9, 10.4, -5832.5, 2802.0, 108.2, 107.5, 108.9, 224.7, 35.0, 3.4, 0.007, 177.4, 464, 92.0, 0, False, False),
+#         ("Earth", 5.97, 12756, 5514, 9.8, 11.2, 23.9, 24.0, 149.6, 147.1, 152.1, 365.2, 29.8, 0.0, 0.017, 23.4, 15, 1.0, 1, False, True),
+#         ("Mars", 0.642, 6792, 3934, 3.7, 5.0, 24.6, 24.7, 228.0, 206.7, 249.3, 687.0, 24.1, 1.8, 0.094, 25.2, -65, 0.01, 2, False, False),
+#         ("Jupiter", 1898.0, 142984, 1326, 23.1, 59.5, 9.9, 9.9, 778.5, 740.6, 816.4, 4331.0, 13.1, 1.3, 0.049, 3.1, -110, np.nan, 95, True, True),
+#         ("Saturn", 568.0, 120536, 687, 9.0, 35.5, 10.7, 10.7, 1432.0, 1357.6, 1506.5, 10747.0, 9.7, 2.5, 0.052, 26.7, -140, np.nan, 274, True, True),
+#         ("Uranus", 86.8, 51118, 1270, 8.7, 21.3, -17.2, 17.2, 2867.0, 2732.7, 3001.4, 30589.0, 6.8, 0.8, 0.047, 97.8, -195, np.nan, 28, True, True),
+#         ("Neptune", 102.0, 49528, 1638, 11.0, 23.5, 16.1, 16.1, 4515.0, 4471.1, 4558.9, 59800.0, 5.4, 1.8, 0.010, 28.3, -200, np.nan, 16, True, True),
+#         ("Pluto", 0.0130, 2376, 1850, 0.7, 1.3, -153.3, 153.3, 5906.4, 4436.8, 7375.9, 90560.0, 4.7, 17.2, 0.244, 119.5, -225, 0.00001, 5, False, np.nan)
+#     ]
 
-    df_planets = pd.DataFrame(planets, columns=columns)
+#     columns = [
+#         "name","mass_1e24kg","diameter_km","density_kg_m3","gravity_m_s2","escape_velocity_km_s",
+#         "rotation_period_hours","length_of_day_hours","distance_from_sun_1e6_km","perihelion_1e6_km","aphelion_1e6_km",
+#         "orbital_period_days","orbital_velocity_km_s","orbital_inclination_deg","orbital_eccentricity",
+#         "obliquity_deg","mean_temperature_c","surface_pressure_bar","number_of_moons","ring_system","global_magnetic_field"
+#     ]
 
-    raw_path = Path(ROOT / 'data' / "planets_all.csv")
-    df_planets.to_csv(raw_path, index=False)
+#     df_planets = pd.DataFrame(planets, columns=columns)
 
-    # NA-free subset
-    na_free_cols = [c for c in df_planets.columns if df_planets[c].notna().all()]
-    df_no_na = df_planets[na_free_cols].copy()
+#     raw_path = Path(ROOT / 'data' / "planets_all.csv")
+#     df_planets.to_csv(raw_path, index=False)
 
-    # convert booleans to integers before scaling
-    for c in df_no_na.select_dtypes(include=["bool"]).columns:
-        df_no_na[c] = df_no_na[c].astype(int)
+#     # NA-free subset
+#     na_free_cols = [c for c in df_planets.columns if df_planets[c].notna().all()]
+#     df_no_na = df_planets[na_free_cols].copy()
 
-    # Z-score numeric features (mean 0, sd 1)
-    numeric_cols = df_no_na.select_dtypes(include=[np.number]).columns
-    means = df_no_na[numeric_cols].mean()
-    stds = df_no_na[numeric_cols].std(ddof=0)  # population SD; switch to ddof=1 if you prefer sample SD
-    stds = stds.replace(0, 1.0)  # guard against division by zero
-    df_no_na[numeric_cols] = (df_no_na[numeric_cols] - means) / stds
+#     # convert booleans to integers before scaling
+#     for c in df_no_na.select_dtypes(include=["bool"]).columns:
+#         df_no_na[c] = df_no_na[c].astype(int)
 
-    # Reorder to ensure 'name' first
-    cols = ["name"] + [c for c in df_no_na.columns if c != "name"]
-    df_z = df_no_na[cols]
+#     # Z-score numeric features (mean 0, sd 1)
+#     numeric_cols = df_no_na.select_dtypes(include=[np.number]).columns
+#     means = df_no_na[numeric_cols].mean()
+#     stds = df_no_na[numeric_cols].std(ddof=0)  # population SD; switch to ddof=1 if you prefer sample SD
+#     stds = stds.replace(0, 1.0)  # guard against division by zero
+#     df_no_na[numeric_cols] = (df_no_na[numeric_cols] - means) / stds
 
-    no_na_path = Path(ROOT / 'data' / "planets_no_missing.csv")
-    df_planets_no_na.to_csv(no_na_path, index=False)
+#     # Reorder to ensure 'name' first
+#     cols = ["name"] + [c for c in df_no_na.columns if c != "name"]
+#     df_z = df_no_na[cols]
 
-    return df_planets_no_na
+#     no_na_path = Path(ROOT / 'data' / "planets_no_missing.csv")
+#     df_planets_no_na.to_csv(no_na_path, index=False)
+
+#     return df_planets_no_na
 
 
-def load_psychometric_data():
-    names = ["Sentences","Vocabulary","Sent.Completion","First.Letters","4.Letter.Words",
-            "Suffixes","Letter.Series","Pedigrees","Letter.Group"]
+# def load_psychometric_data():
+#     names = ["Sentences","Vocabulary","Sent.Completion","First.Letters","4.Letter.Words",
+#             "Suffixes","Letter.Series","Pedigrees","Letter.Group"]
 
-    # 9x9 correlation matrix (from the psych package's Thurstone data)
-    corr = [
-        [1.000, 0.828, 0.776, 0.439, 0.432, 0.447, 0.447, 0.541, 0.380],
-        [0.828, 1.000, 0.779, 0.493, 0.464, 0.489, 0.432, 0.537, 0.358],
-        [0.776, 0.779, 1.000, 0.460, 0.425, 0.443, 0.401, 0.534, 0.359],
-        [0.439, 0.493, 0.460, 1.000, 0.674, 0.590, 0.381, 0.350, 0.424],
-        [0.432, 0.464, 0.425, 0.674, 1.000, 0.541, 0.402, 0.367, 0.446],
-        [0.447, 0.489, 0.443, 0.590, 0.541, 1.000, 0.288, 0.320, 0.325],
-        [0.447, 0.432, 0.401, 0.381, 0.402, 0.288, 1.000, 0.555, 0.598],
-        [0.541, 0.537, 0.534, 0.350, 0.367, 0.320, 0.555, 1.000, 0.452],
-        [0.380, 0.358, 0.359, 0.424, 0.446, 0.325, 0.598, 0.452, 1.000],
-    ]
+#     # 9x9 correlation matrix (from the psych package's Thurstone data)
+#     corr = [
+#         [1.000, 0.828, 0.776, 0.439, 0.432, 0.447, 0.447, 0.541, 0.380],
+#         [0.828, 1.000, 0.779, 0.493, 0.464, 0.489, 0.432, 0.537, 0.358],
+#         [0.776, 0.779, 1.000, 0.460, 0.425, 0.443, 0.401, 0.534, 0.359],
+#         [0.439, 0.493, 0.460, 1.000, 0.674, 0.590, 0.381, 0.350, 0.424],
+#         [0.432, 0.464, 0.425, 0.674, 1.000, 0.541, 0.402, 0.367, 0.446],
+#         [0.447, 0.489, 0.443, 0.590, 0.541, 1.000, 0.288, 0.320, 0.325],
+#         [0.447, 0.432, 0.401, 0.381, 0.402, 0.288, 1.000, 0.555, 0.598],
+#         [0.541, 0.537, 0.534, 0.350, 0.367, 0.320, 0.555, 1.000, 0.452],
+#         [0.380, 0.358, 0.359, 0.424, 0.446, 0.325, 0.598, 0.452, 1.000],
+#     ]
 
-    df = pd.DataFrame(corr, columns=names)
-    df.insert(0, "name", names)
-    out_path = Path(ROOT / 'data' / "psychometric.csv")
-    df.to_csv(out_path, index=False)
-    return df
+#     df = pd.DataFrame(corr, columns=names)
+#     df.insert(0, "name", names)
+#     out_path = Path(ROOT / 'data' / "psychometric.csv")
+#     df.to_csv(out_path, index=False)
+#     return df
 
 
 def load_fmri_data():

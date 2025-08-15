@@ -1,3 +1,4 @@
+
 from heapq import nlargest
 from collections import deque
 import random
@@ -30,6 +31,7 @@ def simplify_graph(G) -> ClusterGraph:
         else:
             G.col_assignments = assignments
             G.col_graph.entity_assignments = assignments
+        G.check_assignments()
 
     def rule_a(G) -> bool:
         counts = G.entity_counts()
@@ -280,8 +282,8 @@ def product_to_ProductClusterGraph(prod_cand, template_grid):
         new_row[i] = r_lid
         new_col[i] = c_lid
 
-    prod_cand.metadata['row_graph'] = template_grid.row_graph
-    prod_cand.metadata['col_graph'] = template_grid.col_graph
+    prod_cand.metadata['row_graph'] = template_grid.row_graph.copy()
+    prod_cand.metadata['col_graph'] = template_grid.col_graph.copy()
     prod_cand.metadata['row_assignments'] = new_row
     prod_cand.metadata['col_assignments'] = new_col
 
@@ -291,6 +293,7 @@ def product_to_ProductClusterGraph(prod_cand, template_grid):
 
     lifted = prod_cand.undo_cartesian_product()
     lifted = simplify_graph(lifted)
+    lifted.check_assignments()
     return lifted
 
 
