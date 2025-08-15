@@ -104,7 +104,7 @@ The code also outputs some plots automatically, saved in `plots/{FILENAME}/`. He
 
 Additionally, the single best scoring graph is displayed in a figure window using Plotly. This allows interaction with the graph and ability to zoom, which can aid in understanding the graph structure when it is busy.
 
-NOTE: I am still playing around with the parameters of the plotting functions, and so (especially when using entity labels, and especially for large datasets) the plots are not always great. I recommend running `demo_ring_feat.py` for some pretty plots.
+NOTE: I am still playing around with the parameters of the plotting functions, and so (especially when using entity labels, and especially for large datasets) the plots are not always great. I recommend running `demo_ring_feat.py` WITHOUT a `--plot_entity_labels` tag for some pretty plots.
 
 ## Start here!
 

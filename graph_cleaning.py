@@ -43,19 +43,27 @@ def simplify_graph(G) -> ClusterGraph:
         return False
     
     def rule_b(G) -> bool:
-        # if G.__class__.__name__ == "TreeClusterGraph":
-        #     return False
-        
         counts = G.entity_counts()
-        for lid in G.latent_adjacency.keys():
+        for lid in list(G.latent_adjacency.keys()):
             if counts.get(lid, 0) != 0:
                 continue
             neighs = list(G.latent_adjacency.get(lid, ()))
             if len(neighs) != 2:
                 continue
-            u, v = neighs
-            if u != v:
-                G.add_edges([(u, v)])
+
+            if G.__class__.__name__ == "TreeClusterGraph":
+                if lid in G.leaf_ids: continue
+                par = G.parent.get(lid, None)
+                kids = list(G.children.get(lid, set()))
+                if par is None or len(kids) != 1: continue # only remove the simple chain case: exactly one parent and one child
+                c = kids[0]
+                G.set_parent_of(c, par)
+                G.add_edges([(par, c)])
+            else:
+                u, v = neighs
+                if u != v:
+                    G.add_edges([(u, v)])
+
             G.remove_latents([lid])
             G.normalise()
             return True
@@ -583,7 +591,6 @@ def reattach_tree_hierarchy(G, base_score, form, data, is_similarity):
 
     near_misses = nlargest(4, near_misses, key=lambda x: x[1])
     return best_graph, best_score, near_misses
-
 
 
 def collapse_dimension(G: ProductClusterGraph, base_score, form, data,

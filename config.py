@@ -1,9 +1,14 @@
 
-# All params are set to the same value as in Kemp and Tenenbaum (2008)
+# All params are set to the same value as in Kemp and Tenenbaum (2008) unless noted
 
 EPSILON = 1e-3 # for structure fitting: when new score - old score is less, end the loop
-N_RESTARTS = 1 # number of times to repeat the complete search
-THETA = 1e-3 # complexity prior: P(S|F) ∝ θ^{|S|}
+N_RESTARTS = 10 # number of times to repeat the complete search
+
+# complexity prior: P(S|F) ∝ θ^{|S|}
+# The paper theta = 1e-3 for all. I found this too strict in penalising complexity, leading to graph with much fewer
+# splits than those reported.
+THETA = 1
+THETA_PROD = 1e-2
 
 EFF_M = 1000 # effective number of features for similarity data (m)
 

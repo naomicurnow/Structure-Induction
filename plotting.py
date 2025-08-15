@@ -377,7 +377,7 @@ def plot_best(
     clusters_tr = go.Scatter(
         x=cx, y=cy, mode="markers+text",
         marker=dict(symbol="circle-open", size=14, line=dict(color="black", width=2)),
-        name="clusters", hovertemplate="cluster %{text}<extra></extra>"
+        name="clusters", text=clabels, hovertemplate="cluster %{text}<extra></extra>"
     )
 
     traces = [edges_tr, clusters_tr]

@@ -11,7 +11,7 @@ import math
 logger = logging.getLogger(__name__)
 
 MIN_L = 1e-12      # min edge length (prevents 1/0 in weights)
-MIN_SIG = 1e-9     # min sigma (keeps prior finite/PD)
+MIN_SIG = 1e-9     # min sigma
 
 LOG_L_MIN  = float(np.log(MIN_L))
 LOG_SIG_MIN = float(np.log(MIN_SIG))

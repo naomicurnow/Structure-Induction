@@ -61,7 +61,8 @@ def main():
         is_similarity = False
         n_entities = D.shape[0]
 
-    forms = [PartitionForm(), OrderForm(), ChainForm(), RingForm(), HierarchyForm(), TreeForm(), GridForm(), CylinderForm()]
+    # OrderForm(), HierarchyForm(), CylinderForm()
+    forms = [PartitionForm(), ChainForm(), RingForm(), TreeForm(), GridForm()]
 
     results = search.search_over_forms(forms, data, n_entities, is_similarity)
     scores = {name: score for name, (_, score) in results.items()}

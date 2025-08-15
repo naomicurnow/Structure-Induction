@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from functools import lru_cache
-from config import THETA
+from config import THETA, THETA_PROD
 from graphs_and_forms import StructuralForm
 from scipy.special import stirling2
 
@@ -19,12 +19,14 @@ def log_structural_prior(cluster_graph, form: StructuralForm) -> float:
 
     if form_name == "grid":
         Z = Z_grid(n)
+        numerator = THETA_PROD ** size_S
     elif form_name == "cylinder":
         Z = Z_cylinder(n)
+        numerator = THETA_PROD ** size_S
     else:
         Z = Z_other(n, form_name)
+        numerator = THETA ** size_S
 
-    numerator = THETA ** size_S
     return np.log(numerator) - np.log(Z)  # return log P(S|F)
 
 
