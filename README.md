@@ -1,8 +1,6 @@
 # Kemp and Tenenbaum (2008) Structure Induction
 
-This is an implementation of the model of structural induction presented in Kemp and Tenenbaum (2008) The discovery of structural form (doi 10.1073 pnas.0802631105). 
-
-The aim of this model is to discover the underlying graph structure which best explains a given dataset. It works at two levels of abstraction: alongside finding the best *type* of graph (tree, ring, ...), it also finds the best *version* of that type (e.g., where are the branching points of the tree?). Formally, given a dataset ...
+This is an implementation of the model of structural induction presented in Kemp and Tenenbaum (2008) The discovery of structural form (doi 10.1073 pnas.0802631105). The aim of this model is to discover the underlying graph structure which best explains a given dataset. It works at two levels of abstraction: alongside finding the best *type* of graph (tree, ring, ...), it also finds the best *version* of that type (e.g., where are the branching points of the tree?).
 
 ## Set up before running
 
