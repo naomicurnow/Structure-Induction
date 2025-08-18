@@ -114,7 +114,14 @@ def main():
     #     raise FileNotFoundError(f"No files matched in {behav_dir} with pattern: noun_behav_subj*.csv")
     # logger.info("Found %d participant files in %s.", len(files), behav_dir)
 
-    data = ROOT / 'word_similarity' / 'data' / 'behav' / f'noun_behav_subj{args.pid}.csv'
+    if int(args.pid) < 10:
+        ID = "0" + str(args.pid)
+    elif int(args.pid) < 36:
+        ID = str(args.pid)
+    else:
+        raise ValueError("Pid not within the required range -- 0 to 35 inclusive")
+
+    data = ROOT / 'word_similarity' / 'data' / 'behav' / f'noun_behav_subj{ID}.csv'
 
     labels_path = ROOT / 'word_similarity' / 'data' / 'labels.txt'
     labels = read_labels(labels_path)
