@@ -17,6 +17,17 @@ def search_over_forms(forms: List[StructuralForm], data: np.ndarray, n_entities:
         logger.important("***** Looking at form: %s *****", form.name)
         graphs = greedy_search(form, data, n_entities, is_similarity, restarts=N_RESTARTS)
         graphs.sort(key=lambda x: x[1], reverse=True)  # higher score first
+
+        # re-score with comparable theta for product forms (grid/cylinder)
+        if form.name in ("grid", "cylinder"):
+            rescored = []
+            for g, _ in graphs:
+                score, opt_params = find_score(g, form, data, is_similarity, speed='slow', reg_theta=True)
+                g.metadata.setdefault("opt_params", {}).update(opt_params)
+                rescored.append((g, score))
+            graphs = sorted(rescored, key=lambda x: x[1], reverse=True)
+            logger.important("Updated scores with comparable theta.")    
+            
         top_graph, top_score = graphs[0]
         for i, (cg, score) in enumerate(graphs, 1):
             logger.important(f"Graph #{i} (score={score:.2f})")

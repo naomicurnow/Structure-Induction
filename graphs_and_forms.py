@@ -566,6 +566,11 @@ class ProductClusterGraph:
             return None
         return row, col
     
+    def find_empty_axes(self):
+        row_empty = [r for r in self.row_graph.order if not np.any(self.row_assignments == r)]
+        col_empty = [c for c in self.col_graph.order if not np.any(self.col_assignments == c)]
+        return row_empty, col_empty
+    
     def form_cartesian_product(self) -> ClusterGraph:
         rows = self.row_graph.order  # in local row lids
         cols = self.col_graph.order  # in local col lids

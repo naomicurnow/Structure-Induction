@@ -141,6 +141,16 @@ def load_fmri_data():
     df.to_csv(out_path, index=False)
     return df
 
+def test_data():
+    matrix = np.array([[5,4,3,2,1],
+                         [4,5,4,3,2],
+                         [3,4,5,4,3],
+                         [2,3,4,5,4],
+                         [1,2,3,4,5]])
+    fp = Path(ROOT / 'data' / 'test_data.csv')
+    df = pd.DataFrame(matrix)
+    df.to_csv(fp, index=False)
+    return df
 
 def load_feature_data(file_name: str) -> pd.DataFrame:
     fp = Path(ROOT / 'data' / file_name)
@@ -239,7 +249,7 @@ def load_sim_data(file_name: str) -> pd.DataFrame:
         names_clean = [f"entity_{i}" for i in range(n_entities)]
 
     # build DataFrame
-    col_labels = [f"entity_{i}" for i in range(n_entities)]
+    col_labels = names_clean
     df = pd.DataFrame(S, columns=col_labels)
     df.insert(0, "name", names_clean)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import logging
 from datetime import datetime
 from plotting import plot_all, plot_best
-import matplotlib.pyplot as plt
+import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE  # repo root
@@ -23,7 +23,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run Kemp & Tenenbaum structural form discovery.")
     parser.add_argument("--file", type=str, help="File name (e.g., animals.mat).")
-    parser.add_argument("--dataset", type=str, choices=["planets", "psychometric", "fmri"],
+    parser.add_argument("--dataset", type=str, choices=["behav_mean"],
                         help="Load a built-in dataset.")
     parser.add_argument("--use_similarity", action="store_true",
                         help="Use similarity matrix instead of raw features.")
@@ -35,12 +35,15 @@ def main():
         raise ValueError("Provide --file or --dataset.")
     
     if args.dataset:
-        if args.dataset == "planets":
-            df = data_processing.load_planet_data()
-        if args.dataset == "psychometric":
-            df = data_processing.load_psychometric_data()
-        if args.dataset == "fmri":
-            df = data_processing.load_fmri_data()
+        # if args.dataset == "planets":
+        #     df = data_processing.load_planet_data()
+        # if args.dataset == "psychometric":
+        #     df = data_processing.load_psychometric_data()
+        # if args.dataset == "fmri":
+        #     df = data_processing.load_fmri_data()
+        if args.dataset == "behav_mean":
+            fp = ROOT / 'word_similarity' / 'data' / 'behav' / 'noun_behav_mean.csv'
+            df = pd.read_csv(fp)
     else:
         if args.use_similarity:
             df = data_processing.load_sim_data(args.file)
@@ -61,7 +64,7 @@ def main():
         is_similarity = False
         n_entities = D.shape[0]
 
-    # OrderForm(), HierarchyForm(), CylinderForm()
+    # PartitionForm(), OrderForm(), HierarchyForm(), CylinderForm()
     forms = [PartitionForm(), ChainForm(), RingForm(), TreeForm(), GridForm()]
 
     results = search.search_over_forms(forms, data, n_entities, is_similarity)

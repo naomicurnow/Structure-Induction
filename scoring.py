@@ -105,7 +105,7 @@ def build_fast_params_vector(entity_graph: EntityGraph, opt_params: Dict[str, An
     return np.array(log_ls + [log_sigma], dtype=float)
 
 
-def find_score(cluster_graph: ClusterGraph, form: StructuralForm, data: np.ndarray, is_similarity: bool, speed: str) -> float:
+def find_score(cluster_graph: ClusterGraph, form: StructuralForm, data: np.ndarray, is_similarity: bool, speed: str, reg_theta: bool = False) -> float:
     """
     Compute log posterior = log P(S,F|D) = log P(D|S) + log P(S|F).
     If speed = 'fast', just evaluate this with given params (weights + sigma).
@@ -151,7 +151,7 @@ def find_score(cluster_graph: ClusterGraph, form: StructuralForm, data: np.ndarr
             ll, opt_params = log_marginal_likelihood(data[np.ix_(mask, mask)], entity_graph, form, tied_only=False, is_similarity=True)
         else:
             ll, opt_params = log_marginal_likelihood(data[mask, :], entity_graph, form, tied_only=False, is_similarity=False)
-    prior = log_structural_prior(restricted_graph, form)
+    prior = log_structural_prior(restricted_graph, form, reg_theta=reg_theta)
     total = ll + prior
     logger.debug("ll=%.4f, prior=%.4f, total=%.4f", ll, prior, total)
     return total, opt_params
