@@ -1,4 +1,5 @@
 
+import argparse
 import re
 import sys
 import logging
@@ -99,37 +100,45 @@ def run_one_participant(fp: Path, labels: list[str]):
     return best_form, scores, post_probs
 
 def main():
+    parser = argparse.ArgumentParser(description="Run Kemp & Tenenbaum structural form discovery on word similarity.")
+    parser.add_argument("--pid", type=str, help="ID of the participant.")
+    args = parser.parse_args()
+
     main_log, imp_log = setup_logging()
     logger.info("Logging to %s", main_log)
     logger.info("Important log at %s", imp_log)
 
-    behav_dir = ROOT / 'word_similarity' / 'data' / 'behav'
-    files = sorted(behav_dir.glob("noun_behav_subj*.csv"))
-    if not files:
-        raise FileNotFoundError(f"No files matched in {behav_dir} with pattern: noun_behav_subj*.csv")
-    logger.info("Found %d participant files in %s.", len(files), behav_dir)
+    # behav_dir = ROOT / 'word_similarity' / 'data' / 'behav'
+    # files = sorted(behav_dir.glob("noun_behav_subj*.csv"))
+    # if not files:
+    #     raise FileNotFoundError(f"No files matched in {behav_dir} with pattern: noun_behav_subj*.csv")
+    # logger.info("Found %d participant files in %s.", len(files), behav_dir)
+
+    data = ROOT / 'word_similarity' / 'data' / 'behav' / f'noun_behav_subj{args.pid}.csv'
 
     labels_path = ROOT / 'word_similarity' / 'data' / 'labels.txt'
     labels = read_labels(labels_path)
     logger.info("Loaded %d labels from %s", len(labels), labels_path) 
 
-    summary_rows = []
-    for i, fp in enumerate(files, 1):
-        pid = parse_participant_id(fp)
-        best_form, scores, post_probs = run_one_participant(fp, labels)
-        summary_rows.append({
-            "participant": pid,
-            "file": fp.name,
-            "best_form": best_form,
-            **{f"score_{k}": v for k, v in scores.items()},
-            **{f"prob_{k}": p for k, p in post_probs.items()},
-        })
+    run_one_participant(data, labels)
 
-    # write a CSV summary of best forms and scores
-    summary_df = pd.DataFrame(summary_rows)
-    summary_path = behav_dir / "participants_summary.csv"
-    summary_df.to_csv(summary_path, index=False)
-    logger.important(f"Summary written to: {summary_path}")
+    # summary_rows = []
+    # for i, fp in enumerate(files, 1):
+    #     pid = parse_participant_id(fp)
+    #     best_form, scores, post_probs = run_one_participant(fp, labels)
+    #     summary_rows.append({
+    #         "participant": pid,
+    #         "file": fp.name,
+    #         "best_form": best_form,
+    #         **{f"score_{k}": v for k, v in scores.items()},
+    #         **{f"prob_{k}": p for k, p in post_probs.items()},
+    #     })
+
+    # # write a CSV summary of best forms and scores
+    # summary_df = pd.DataFrame(summary_rows)
+    # summary_path = behav_dir / "participants_summary.csv"
+    # summary_df.to_csv(summary_path, index=False)
+    # logger.important(f"Summary written to: {summary_path}")
 
 if __name__ == "__main__":
     main()

@@ -23,3 +23,5 @@ data/*
 !data/synthpartition.mat
 !data/synthring.mat
 !data/synthtree.mat
+
+word_similarity/data
